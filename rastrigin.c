@@ -2,6 +2,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// TODO: Add dynamic parameter choices
+// TODO: Add support for multiple optimizers
+// TODO: Wrap everything in a better way suited for Python binding
+
+// DECLARATION: Use this code for fast generation of Rastrigin optimization trajectories
+// Parameters for Rastrigin: dimension, (optimization) steps, learning rate (ADAM-like optimization)
+// Stores trajectory in arrays x_traj, f_traj and grad_traj (x, f(x), nabla f(x) for each step)
+
 // Constants
 #define PI 3.14159265358979323846
 
