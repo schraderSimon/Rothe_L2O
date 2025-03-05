@@ -1,21 +1,7 @@
-import scipy
-import matplotlib.pyplot as plt
 from scipy.optimize import minimize
-import numba
 from numba import jit
 import sys
-import os
-#import sympy as sp
-from scipy import linalg
-import time
-from numpy.polynomial.hermite import hermgauss
-import argparse #I need to keep this 
-import warnings
-warnings.filterwarnings("error", category=RuntimeWarning, message="invalid value encountered in arctanh")
-
-from numpy import cosh, tanh, arctanh, sin, cos, tan, arcsin, arccos, exp, array, sqrt, pi
 from quadratures import gaussian_quadrature, trapezoidal_quadrature
-from helper_functions import get_Guess_distribution,cosine4_mask
 from mean_field_grid_rothe import *
 np.set_printoptions(linewidth=300, precision=16, suppress=True, formatter={'float': '{:0.7e}'.format})
 from exchange_correlation_functionals import v_xc,epsilon_xc
@@ -31,7 +17,7 @@ def hartree_potential(grid,rho,weights,vee=v_ee_coulomb):
 
 
 
-@jit(nopython=True, fastmath=False,parallel=True)
+@jit(nopython=True,cache=True, fastmath=False,parallel=True)
 def setupfunctions(gaussian_nonlincoeffs,points):
     if gaussian_nonlincoeffs.ndim==1:
         num_gauss=1
@@ -57,7 +43,7 @@ def setupfunctions(gaussian_nonlincoeffs,points):
         minus_half_laplacians[i][indices_of_interest] = minus_half_laplacian_vals
     
     return functions, minus_half_laplacians
-@jit(nopython=True, fastmath=False,parallel=True)
+@jit(nopython=True,cache=True, fastmath=False,parallel=True)
 def setupfunctionsandDerivs(gaussian_nonlincoeffs, points):
     """
     Evaluate complex Gaussian functions and their derivatives on a grid,
@@ -136,7 +122,7 @@ def setupfunctionsandDerivs(gaussian_nonlincoeffs, points):
 
     return (functions, minus_half_laplacians,
             aderiv_funcs, bderiv_funcs, pderiv_funcs, qderiv_funcs,
-            aderiv_kin_funcs, bderiv_kin_funcs, pderiv_kin_funcs, qderiv_kin_funcs)#@jit(nopython=True,fastmath=False,cache=False)
+            aderiv_kin_funcs, bderiv_kin_funcs, pderiv_kin_funcs, qderiv_kin_funcs)
 def calculate_overlapmatrix(functions,wT):
     num_gauss=len(functions)
     overlap_matrix=np.zeros((num_gauss,num_gauss),dtype=np.complex128)
@@ -148,141 +134,12 @@ def calculate_overlapmatrix(functions,wT):
             overlap_matrix[i,j]=overlap_integraded
             overlap_matrix[j,i]=np.conj(overlap_integraded)
     return overlap_matrix
-#@jit(nopython=True,fastmath=False,cache=False)
-def calculate_onebody_and_overlap(functions,minus_half_laplacians,potential_grid,wT):
-    num_gauss=len(functions)
-    for i in range(num_gauss):
-        i_conj=np.conj(functions[i])
-        for j in range(i,num_gauss):
-            integrand_minus_half_laplace=i_conj*minus_half_laplacians[j]
-            integrand_overlap=i_conj*functions[j]
-            integrand_potential=integrand_overlap*potential_grid
-            overlap_integraded=wT@integrand_overlap
-            ij_integrated=wT@integrand_minus_half_laplace+wT@integrand_potential
-            onebody_matrix[i,j]=ij_integrated
-            onebody_matrix[j,i]=np.conj(ij_integrated)
-            overlap_matrix[i,j]=overlap_integraded
-            overlap_matrix[j,i]=np.conj(overlap_integraded)
-    return onebody_matrix,overlap_matrix
-def calculate_twobody_integrals_numba(functions, e_e_grid, weights, num_gauss):
-    twobody_integrals = np.zeros((num_gauss,num_gauss,num_gauss,num_gauss), dtype=np.complex128)
-    
-    # Precompute conjugated functions and cross products
-    cross_functions = np.zeros((num_gauss, num_gauss, len(functions[0])), dtype=np.complex128)
-    weighted_e_e_grid = e_e_grid * weights[:, np.newaxis]
-    conj_functions=np.conj(functions)
-    for i in range(num_gauss):
-        for j in range(num_gauss):
-            cross_functions[i, j] = conj_functions[i] * functions[j]
-    for i in range(num_gauss):
-        for k in range(i+1):
-            index_ik=i*num_gauss+k
-            ik_e_contr = np.sum(cross_functions[i, k][:, np.newaxis] * weighted_e_e_grid, axis=0)
-            
-            for j in range(num_gauss):
-                for l in range(num_gauss):
-                    index_jl=j*num_gauss+l
-                    if index_ik<index_jl:
-                        continue
-                    jl_grid = cross_functions[j, l]
-                    val=np.sum(jl_grid * ik_e_contr * weights)
-                    cval=np.conj(val)
-                    twobody_integrals[i, k, j, l] = val
-                    twobody_integrals[j, l, i, k] = val
-
-                    twobody_integrals[k, i, l, j] = cval
-                    twobody_integrals[l, j, k, i] = cval
-
-
-    return twobody_integrals
-def restricted_hartree_fock(S, onebody, twobody, num_electrons, max_iterations=1, convergence_threshold=1e-11,C_init=None):
-    """
-    Perform Restricted Hartree-Fock (RHF) calculation for complex matrices with physicist's notation for two-body integrals.
-    
-    Args:
-    S: Complex overlap matrix
-    onebody: Complex one-body integrals
-    twobody: Complex two-body integrals in physicist's notation (mu nu | lambda sigma)
-    num_electrons: Number of electrons in the system
-    max_iterations: Maximum number of SCF iterations
-    convergence_threshold: Convergence criterion for energy difference
-    
-    Returns
-    E: Final Hartree-Fock energy
-    C: Orbital coefficients
-    F: Final Fock matrix
-    """
-    num_basis = S.shape[0]
-    num_occupied = num_electrons // 2
-    print(num_occupied)
-    if num_electrons % 2 != 0:
-        raise ValueError("RHF requires an even number of electrons.")
-
-    # Step 1: Orthogonalize the basis (S^-1/2)
-    s_eigenvalues, s_eigenvectors = linalg.eigh(S+lambd*np.eye(S.shape[0]))
-    X = linalg.inv(linalg.sqrtm(S+lambd*np.eye(S.shape[0])))
-    #print(s_eigenvalues)
-
-    # Step 2: Initial guess for density matrix
-    if C_init is not None:
-        C = C_init
-    else:
-        F = X.conj().T @ onebody @ X
-
-        epsilon, C = linalg.eigh(F)
-        C = X @ C
-    P = 2*np.einsum("mj,vj->mv", C[:,:num_occupied], C.conj()[:,:num_occupied])
-    E_old = 0
-    for iteration in range(max_iterations):
-        # Step 3: Build Fock matrix
-        J = np.einsum('mnsl,ls->mn', twobody, P)
-        K = np.einsum('mlsn,ls->mn', twobody, P)
-        F = onebody+J - 0.5*K
-        # Step 4: Calculate energy
-        
-        E=0.5*np.einsum("mn,nm->",P,F+onebody)
-        if abs(E - E_old) < convergence_threshold:
-            #print(f"Convergence reached at iteration {iteration + 1}")
-            break
-        # Step 5: Solve eigenvalue problem
-        F_prime = X.conj().T @ F @ X
-        epsilon, C_prime = linalg.eigh(F_prime)
-        C = X @ C_prime[:,:num_occupied]
-        epsilon=epsilon[:num_occupied]
-        # Step 6: Form new density matrix
-        P = 2*np.einsum("mj,vj->mv", C[:,:num_occupied], C.conj()[:,:num_occupied])
-
-        E_old = E
-    else:
-        print(f"Warning: Reached maximum iterations ({max_iterations}) without converging.")
-
-    return E, C, F,epsilon
-def calculate_energy(gaussian_nonlincoeffs,return_all=False,C_init=None,maxiter=20):
-    num_gauss=len(gaussian_nonlincoeffs.flatten())//4
-    gaussian_nonlincoeffs=gaussian_nonlincoeffs.reshape((num_gauss,4))
-    functions,minus_half_laplacians=setupfunctions(gaussian_nonlincoeffs,points)
-    onebody_matrix,overlap_matrix=calculate_onebody_and_overlap(functions,minus_half_laplacians,potential_grid,wT)
-    twobody_integrals=calculate_twobody_integrals_numba(np.ascontiguousarray(functions), e_e_grid, weights, num_gauss)
-    repulsion_contribution=0
-    for i in range(len(Z_list)):
-        for j in range(i+1,len(Z_list)):
-            repulsion_contribution+=Z_list[i]*Z_list[j]/np.abs(R_list[i]-R_list[j])
-    n_elec=4
-    if molecule=="LiH2":
-        n_elec=8
-    E,C,F,epsilon=restricted_hartree_fock(overlap_matrix,onebody_matrix,twobody_integrals,n_elec,C_init=C_init,max_iterations=maxiter)
-    Efinal=float(E+repulsion_contribution)
-    print(Efinal)
-    if return_all:
-        print("Returning all")
-        return Efinal,C,epsilon
-    return Efinal
 
 def make_orbitals(C,gaussian_nonlincoeffs):
     functions,minus_half_laplacians=setupfunctions(gaussian_nonlincoeffs.reshape((C.shape[0],4)),points)
     return make_orbitals_numba(C,gaussian_nonlincoeffs,functions)
 
-@jit(nopython=True,fastmath=False,cache=False)
+@jit(nopython=True,cache=True,fastmath=False)
 def make_orbitals_numba(C,gaussian_nonlincoeffs,functions):
     nbasis=C.shape[0]
     norbs=C.shape[1]
@@ -304,7 +161,7 @@ def calculate_v_gauss(fockOrbitals,gaussian_nonlincoeffs,num_gauss,time_dependen
     functions,minus_half_laplacians=setupfunctions(gaussian_nonlincoeffs,points)
     return calculate_v_gauss_fast(np.array(fockOrbitals),num_gauss,time_dependent_potential,np.array(functions),np.array(minus_half_laplacians))
 
-@jit(nopython=True,fastmath=False,cache=False)
+@jit(nopython=True,fastmath=True)
 def calculate_Fgauss_fast(fockOrbitals,num_gauss,time_dependent_potential,functions,minus_half_laplacians):
     nFock=len(fockOrbitals)
     Fgauss=minus_half_laplacians
@@ -320,7 +177,6 @@ def calculate_Fgauss_fast(fockOrbitals,num_gauss,time_dependent_potential,functi
             exchange_term =(fock_orbitals_conj[j] * functions[i]).T@weighted_e_e_grid
             Fgauss[i] += -exchange_term * fockOrbitals[j]
     return Fgauss
-#@jit(nopython=True,fastmath=False,cache=False)
 def calculate_v_gauss_fast(previous_time_orbitals,num_gauss,time_dependent_potential,functions,minus_half_laplacians):
     nOrbs=len(previous_time_orbitals)
     Agauss=minus_half_laplacians
@@ -333,7 +189,7 @@ def calculate_v_gauss_fast(previous_time_orbitals,num_gauss,time_dependent_poten
     potential_term+=v_xc(electron_density)
     Agauss+=potential_term*functions
     return Agauss
-@jit(nopython=True,fastmath=False,cache=False)
+@jit(nopython=True,cache=True,fastmath=False)
 def calculate_Ftimesorbitals(orbitals,FocktimesGauss):
     nbasis=orbitals.shape[0]
     norbs=orbitals.shape[1]
@@ -388,11 +244,9 @@ class Rothe_evaluator:
                                                     functions=np.array(functions),minus_half_laplacians=np.array(minus_half_laplacians))
         return functions,fock_act_on_frozen_gauss
     
-    def rothe_plus_gradient(self,nonlin_params_unfrozen,hessian=False,printing=False,calculate_overlap=False,include_overlap_correction=True):
+    def rothe_plus_gradient(self,nonlin_params_unfrozen):
         old_action=self.old_action *sqrt_weights
         gradient=np.zeros_like(nonlin_params_unfrozen)
-        if include_overlap_correction:
-            calculate_overlap=True
 
         nonlin_params=np.concatenate((self.params_frozen,nonlin_params_unfrozen))
         functions_u,minus_half_laplacians_u,aderiv_funcs, bderiv_funcs, pderiv_funcs, qderiv_funcs, aderiv_kin_funcs, bderiv_kin_funcs, pderiv_kin_funcs, qderiv_kin_funcs=setupfunctionsandDerivs(nonlin_params_unfrozen.reshape((-1,4)),points)
@@ -462,61 +316,8 @@ class Rothe_evaluator:
                 gradvecs[i]+=gradvec
         
         gradvecs=np.array(gradvecs)
-        if calculate_overlap or include_overlap_correction:
-            overlapmatrix=calculate_overlapmatrix(functions,weights)
-            if printing:
-                overlapmatrix_eigvals=np.linalg.eigvalsh(overlapmatrix)
-                ovlp_mindiag=overlapmatrix-np.eye(overlapmatrix.shape[0])
-                print("Smallest Overlap matrix eigenvalues",
-                       np.array2string(overlapmatrix_eigvals[:3], formatter={'float_kind': lambda x: "%.2e" % x}),
-                         "Biggest Overlap matrix element", np.max(abs(ovlp_mindiag)))
-        
-        if include_overlap_correction: #This is the correction to the gradient that ensures that the Gaussians don't become linearly dependent
-            beta=1e-16
-            o=overlapmatrix
-            overlap_matrix_abssquared=np.abs(overlapmatrix)**2
-            o_abs=np.abs(o)
-            Ngauss_tot=o.shape[0]
-            N_occ=len(nonlin_params_unfrozen)//4
-            overlap_error=0
-            prefac=beta/(1-0.99**2)
-            for i in range(Ngauss_tot):
-                for j in range(i):
-                    if i==j or (i<self.nfrozen and j<self.nfrozen):
-                        continue
-                    
-                    if o_abs[i,j]>0.99:
-                       
-                        overlap_error+=prefac*(o_abs[i,j]**2-0.99**2) #This is the penalty term
-                        
-                        #Next, we have to update the gradient for gaussians i and j by addin the derivative of the penalty term
-                        aideriv=sum(aderiv_funcs[i-self.nfrozen]*np.conj(functions[j])*weights)
-                        bideriv=sum(bderiv_funcs[i-self.nfrozen]*np.conj(functions[j])*weights)
-                        pideriv=sum(pderiv_funcs[i-self.nfrozen]*np.conj(functions[j])*weights)
-                        qideriv=sum(qderiv_funcs[i-self.nfrozen]*np.conj(functions[j])*weights)
-                        gradient[4*i-4*self.nfrozen]+=2*prefac*np.real(o[j,i]*aideriv)
-                        gradient[4*i+1-4*self.nfrozen]+=2*prefac*np.real(o[j,i]*bideriv)
-                        gradient[4*i+2-4*self.nfrozen]+=2*prefac*np.real(o[j,i]*pideriv)
-                        gradient[4*i+3-4*self.nfrozen]+=2*prefac*np.real(o[j,i]*qideriv)
-                        if j>=self.nfrozen:
-                            # If the other Gaussian is not frozen, we also have to update its gradient
-                            ajderiv=sum(aderiv_funcs[j-self.nfrozen]*np.conj(functions[i])*weights)
-                            bjderiv=sum(bderiv_funcs[j-self.nfrozen]*np.conj(functions[i])*weights)
-                            pjderiv=sum(pderiv_funcs[j-self.nfrozen]*np.conj(functions[i])*weights)
-                            qjderiv=sum(qderiv_funcs[j-self.nfrozen]*np.conj(functions[i])*weights)
-                            gradient[4*j-4*self.nfrozen]+=2*prefac*np.real(o[i,j]*ajderiv)
-                            gradient[4*j+1-4*self.nfrozen]+=2*prefac*np.real(o[i,j]*bjderiv)
-                            gradient[4*j+2-4*self.nfrozen]+=2*prefac*np.real(o[i,j]*pjderiv)
-                            gradient[4*j+3-4*self.nfrozen]+=2*prefac*np.real(o[i,j]*qjderiv)
 
-            rothe_error+=overlap_error
-            if printing:
-                print("Overlap correction: %e"%overlap_error)
-        if hessian:
-            hessian_val=np.real(2*gradvecs@np.conj(gradvecs).T)
-            return rothe_error,gradient,hessian_val
-        else:
-            return rothe_error,gradient
+        return rothe_error,gradient
 
 class Rothe_propagation:
     def __init__(self,params_initial,lincoeffs_initial,pulse,timestep,points,nfrozen=0,t=0,norms=None,params_previous=None,method="HF"):
@@ -612,12 +413,12 @@ def make_error_and_gradient_functions(method,molecule,quality,t0):
     rothepropagator.time_dependent_potential=rothepropagator.pulse(t0+dt/2)*points
     rothe_evaluator=Rothe_evaluator(gaussian_nonlincoeffs_unreshaped,lincoeff_initial,rothepropagator.time_dependent_potential,dt,rothepropagator.nfrozen,rothepropagator.method)
     initial_full_new_params=gaussian_nonlincoeffs_unreshaped[4*nfrozen:]
-    def error_function_optimization(initial_full_new_params):
-        error=rothe_evaluator.rothe_plus_gradient(initial_full_new_params)[0]
+    def error_function_optimization(parameters):
+        error=rothe_evaluator.rothe_plus_gradient(parameters)[0]
         print(error)
         return error
     def gradient_optimization(parameters):
-        return rothe_evaluator.rothe_plus_gradient(initial_full_new_params)[1]
+        return rothe_evaluator.rothe_plus_gradient(parameters)[1]
     return error_function_optimization,gradient_optimization,initial_full_new_params
 method=sys.argv[1] # HF or DFT
 molecule=sys.argv[2]
@@ -648,7 +449,6 @@ points=np.concatenate((points_outer1,points_inner,points_outer2))
 weights=np.concatenate((weights_outer1,weights_inner,weights_outer2))
 potential_grid=calculate_potential(Z_list,R_list,alpha,points)
 lambd=5e-10
-cosine_mask=cosine4_mask(points,grid_a+5,grid_b-5)
 sqrt_weights=np.sqrt(weights)
 V=external_potential=calculate_potential(Z_list,R_list,alpha,points)
 wT=weights.T
@@ -661,5 +461,8 @@ grad_initial=optimizee_grad(parameters)
 print("Initial error: ", error_initial)
 print("Initial gradient: ", grad_initial)
 hess_inv0=np.diag(1/np.abs(grad_initial))
-result=minimize(optimizee,parameters,method="BFGS",jac=optimizee_grad,options={"gtol":1e-10,"hess_inv0":hess_inv0})
-print(optimizee(result.x))
+
+res=minimize(optimizee,parameters,method="BFGS",jac=optimizee_grad,options={"maxiter":50,"gtol":1e-9,"hess_inv0":hess_inv0})
+
+print("Best function value found:", res.fun)
+print("Best x found:", res.x)
