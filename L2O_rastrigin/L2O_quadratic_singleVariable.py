@@ -52,41 +52,6 @@ class L2OOptimizer(nn.Module):
             self.lstm_cells.append(nn.LSTMCell(input_size=hidden_size, hidden_size=hidden_size))
         
         self.fc = nn.Linear(hidden_size, 1)
-
-    def forward_old(self, x, grad, hidden_LSTM):
-        batch_size, n = x.shape
-
-        new_hidden_h_layers = torch.zeros(batch_size, n, self.num_layers, self.hidden_size, device=x.device)
-        new_hidden_c_layers = torch.zeros(batch_size, n, self.num_layers, self.hidden_size, device=x.device)
-
-        x_new=torch.zeros(batch_size, n)
-        delta=torch.zeros(batch_size, n)
-        for i in range(n):
-            grad_i =grad[:, i, None]# grad[:, i].reshape(-1,1)  # (batch_size, 1)
-
-            gradient_sign = grad_i.sign()
-            epsilon = 1e-14
-            gradient_magnitude = torch.log(torch.abs(grad_i) + epsilon)
-            inp = torch.cat([gradient_sign, gradient_magnitude], dim=1)  # (batch_size, 2)
-            inp_transformed = self.initial_transform(inp)  # (batch_size, linear_size)
-            
-            inp_layer = inp_transformed # The first input to the LSTM is the transformed input.
-
-            for layer in range(self.num_layers):
-                h_i = hidden_LSTM[0][:, i, layer, :]  # (batch_size, hidden_size)
-                c_i = hidden_LSTM[1][:, i, layer, :]  # (batch_size, hidden_size)
-                
-                h_new, c_new = self.lstm_cells[layer](inp_layer, (h_i, c_i))
-
-                new_hidden_h_layers[:, i, layer, :] = h_new
-                new_hidden_c_layers[:, i, layer, :] = c_new
-
-                inp_layer = h_new # The next input to the LSTM is the hidden state of the current layer.
-
-            delta[:,i] = self.fc(h_new)[:,0] 
-            x_new[:,i] = x[:, i] + delta[:,i]  
-
-        return x_new, (new_hidden_h_layers, new_hidden_c_layers), delta
     def forward(self, x, grad, hidden_LSTM):
         batch_size, n = x.shape
 
@@ -96,8 +61,12 @@ class L2OOptimizer(nn.Module):
         x_new=torch.zeros(batch_size, n)
         delta=torch.zeros(batch_size, n)
         grad_expanded=grad[:,:,None]
+        p_exp=torch.exp(torch.tensor(self.p, dtype=grad_expanded.dtype, device=grad_expanded.device))
+        #mask = grad_expanded.abs() > 1/p_exp
+        #gradient_signs=torch.where(mask,grad_expanded.sign(),p_exp*grad_expanded)
+        #gradient_magnitudes=torch.where(mask,torch.log(grad_expanded.abs())/self.p,-torch.ones_like(grad_expanded))
         gradient_signs = grad_expanded.sign()
-        gradient_magnitudes=torch.log(torch.abs(grad_expanded)+1e-14)
+        gradient_magnitudes=torch.log(torch.abs(grad_expanded)+1e-16)
         inp_all=torch.cat([gradient_signs, gradient_magnitudes], dim=2)  # (batch_size, n, 2)
         inp_transformed = self.initial_transform(inp_all)  # (batch_size, n, linear_size)
         inp_layer = inp_transformed # The first input to the LSTM is the transformed input.
