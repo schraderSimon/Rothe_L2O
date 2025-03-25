@@ -1,0 +1,8 @@
+{
+  "linear_size": 32,
+  "hidden_size": 256,
+  "num_layers": 3,
+  "T": 20,
+  "lr": 0.004142096527564239,
+  "num_epochs": 300
+}

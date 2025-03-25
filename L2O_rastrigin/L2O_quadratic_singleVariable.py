@@ -1,22 +1,19 @@
+import os
+import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import math
 from collections import OrderedDict
-import torch.jit
-import sys
+import json
+import ray
+from ray import tune
+from ray.tune.schedulers import ASHAScheduler
+# Import the new session and Checkpoint objects
+from ray.tune import Checkpoint
+#from ray.train import session, Checkpoint
+import tempfile
+import ray.cloudpickle as pickle
 # Define the shifted N-dimensional Rastrigin function.
-def rastrigin(x, shift, A):
-    """
-    Computes the shifted Rastrigin function:
-      f(x) = A*n + sum((x - shift)^2 - A*cos(2*pi*(x - shift)))
-    x: tensor of shape (batch_size, n)
-    shift: tensor of shape (batch_size, n)
-    Returns: tensor of shape (batch_size,) containing function values.
-    """
-    n = x.shape[1]
-    z = x - shift
-    return A * n + torch.sum(z ** 2 - A * (torch.cos(2 * math.pi * z)), dim=1)
 def generate_random_quadratic(n, batch_size):
     # Random symmetric matrix + diagonal shift for positive definiteness
     A = torch.randn(batch_size, n, n) #Random matrix
@@ -28,7 +25,9 @@ def quadratic(x, A, mu):
     # Compute (x-mu)^T A (x-mu)+s for each batch element
     xminmu = x - mu
     return torch.einsum('bi,bij,bj->b', xminmu, A, xminmu)  # Shape: (batch_size,)
-
+def quadratic_grad(x,A,mu):
+    xminmu=x-mu
+    return 2.0 * torch.einsum('bij,bj->bi',A,xminmu)
 # Define the L2O network that will learn the update rule.
 # This version acts on one variable at a time.
 class L2OOptimizer(nn.Module):
@@ -98,68 +97,195 @@ class L2OOptimizer(nn.Module):
         h_0 = self.h_0[None,None,:,:].repeat(batch_size, n, 1, 1).contiguous()
         c_0 = self.c_0[None,None,:,:].repeat(batch_size, n, 1, 1).contiguous()
         return (h_0, c_0)
-def main():
-    # Hyperparameters.
-    batch_size = 64   
-    nmin = 1 # Minimal dimension of the function
-    nmax =20 # Maximal dimension of the function
-    lowest=nmax
-    linear_size = 64
-    hidden_size = 128  # Hidden dimension for each LSTM cell.
-    num_layers =  3     # Number of stacked LSTM layers.
-    T = 10              # Number of inner optimization steps per instance.
-    num_epochs = 20000
-    learning_rate = 1e-3
-    perturb = 1      # Standard deviation of the random perturbation of the Rastrigin function.
-    p=10
-    # Create weights for the loss accumulated over T steps.
+    
+def train_l2o(config):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    linear_size   = config["linear_size"]
+    hidden_size   = config["hidden_size"]
+    num_layers    = config["num_layers"]
+    T             = config["T"]
+    learning_rate = config["lr"]
+    num_epochs    = config["num_epochs"]
+
+    batch_size = 64
+    nmin, nmax = 1, 20
+    p = 10
+    perturb = 1.0
+
     weights_T = torch.ones(T)
     weights_T[0] = 0
-    for i in range(1, T-1):
+    for i in range(1, T - 1):
         weights_T[i+1] = weights_T[i]
     weights_T = weights_T / weights_T.sum()
-    
-    # Initialize the L2O network.
-    l2o_net = L2OOptimizer(hidden_size, num_layers=num_layers,linear_size=linear_size,p=p)
-    optimizer = optim.Adam(l2o_net.parameters(), lr=learning_rate)
-    
-    for epoch in range(num_epochs):
-        #lowest = torch.min(torch.tensor([int(epoch/10) + nmin + 1, nmax]))
-        n = int(torch.randint(low=nmin, high=lowest, size=(1,))[0])
-        #hidden_init_h = [torch.zeros(batch_size, n, hidden_size) for _ in range(num_layers)]
-        #hidden_init_c = [torch.zeros(batch_size, n, hidden_size) for _ in range(num_layers)]
-        #hidden = (hidden_init_h, hidden_init_c)
-        hidden = l2o_net.get_init_states(batch_size, n)
-        optimizer.zero_grad()
-        
-        # For each instance, sample a random shift vector s ~ N(0, perturb).
-        A=generate_random_quadratic(n, batch_size)
-        mu=torch.randn(batch_size, n)*perturb
-        # The initial guess is x_0 = 0.
-        x = torch.zeros(batch_size, n, requires_grad=True)
-        
-        total_loss = 0.0
-        full_init_loss = quadratic(x, A, mu)
-        initial_loss =full_init_loss.mean()
 
-        final_loss = 0.0
-        
-        # Unroll the inner optimization for T steps.
+    l2o_net = L2OOptimizer(hidden_size, linear_size=linear_size, num_layers=num_layers, p=p)
+    l2o_net.to(device)
+    optimizer = optim.Adam(l2o_net.parameters(), lr=learning_rate)
+
+    train_loss_buffer = []
+    final_loss_buffer = []
+
+    for epoch in range(num_epochs):
+        n = int(torch.randint(nmin, nmax+1, (1,))[0])
+        hidden = l2o_net.get_init_states(batch_size, n)
+        hidden = (hidden[0].to(device), hidden[1].to(device))
+
+        A  = generate_random_quadratic(n, batch_size).to(device)
+        mu = (torch.randn(batch_size, n)*perturb).to(device)
+
+        x = torch.zeros(batch_size, n, device=device, requires_grad=True)
+
+        init_loss = quadratic(x, A, mu)
+        total_loss = 0.0
+        final_loss_value = 0.0
+
         for j in range(T):
-            f_val = quadratic(x, A, mu)/initial_loss # Normalize the function value by the initial loss.
-            loss_step = f_val.mean() # Average over the batch dimension.
-            total_loss = total_loss + loss_step * weights_T[j] 
+            f_val = quadratic(x, A, mu) / (init_loss + 1e-12)
+            loss_step = f_val.mean()
+            total_loss += loss_step * weights_T[j]
+
             if j == T-1:
-                final_loss = loss_step
+                final_loss_value = loss_step.item()
+
             if j < T-1:
-                grad_of_optim = torch.autograd.grad(loss_step, x, create_graph=True)[0]
-                x, hidden, delta = l2o_net(x, grad_of_optim, hidden)
-        
-        if epoch % 10 == 0:
-            print(f"Epoch {epoch}, n {n}, Loss (in percent): {(total_loss.mean()):.3e}, Initial Loss: 1, Final Loss (in percent): {(final_loss.mean()):.3e}")
+                #grad_ = torch.autograd.grad(loss_step, x, create_graph=True)[0]
+                grad_ = quadratic_grad(x, A, mu) / (init_loss.reshape(-1, 1) + 1e-12) / x.shape[0]
+                x, hidden, _ = l2o_net(x, grad_, hidden)
+
+        optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(l2o_net.parameters(), max_norm=1) 
+        torch.nn.utils.clip_grad_norm_(l2o_net.parameters(), 1.0)
         optimizer.step()
 
-if __name__ == '__main__':
-    main()
+        current_train_loss = total_loss.item()
+        current_final_loss = final_loss_value
+
+        train_loss_buffer.append(current_train_loss)
+        final_loss_buffer.append(current_final_loss)
+        if len(train_loss_buffer) > 20:
+            train_loss_buffer.pop(0)
+            final_loss_buffer.pop(0)
+
+        avg_train_loss_20 = sum(train_loss_buffer)/len(train_loss_buffer)
+        avg_final_loss_20 = sum(final_loss_buffer)/len(final_loss_buffer)
+
+        metrics = {
+            "epoch": epoch,
+            "train_loss": current_train_loss,
+            "train_loss_20avg": avg_train_loss_20,
+            "final_loss_20avg": avg_final_loss_20,
+        }
+        
+        if epoch % 50 == 0 or epoch == num_epochs - 1:
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                ckpt_path = os.path.join(tmpdirname, "model_state_dict.pkl")
+                with open(ckpt_path, "wb") as fp:
+                    pickle.dump(l2o_net.state_dict(), fp)
+                checkpoint = Checkpoint.from_directory(tmpdirname)
+                tune.report(metrics, checkpoint=checkpoint)
+        else:
+            tune.report(metrics)
+
+def run_tuning(config,num_samples=10):
+    ray.init()
+
+    
+
+    scheduler = ASHAScheduler(
+        metric="final_loss_20avg",
+        mode="min",
+        max_t=config["num_epochs"],
+        grace_period=50,
+        reduction_factor=2
+    )
+
+    analysis = tune.run(
+        train_l2o,
+        config=config,
+        num_samples=num_samples,
+        scheduler=scheduler,
+        verbose=1
+    )
+
+    best_trial = analysis.get_best_trial(metric="final_loss_20avg", mode="min")
+    best_checkpoint = analysis.get_best_checkpoint(
+        best_trial, 
+        metric="final_loss_20avg", 
+        mode="min"
+    )
+    best_config = best_trial.config
+    with open("best_config.json", "w") as f:
+        json.dump(best_config, f, indent=2)
+    if best_checkpoint is not None:
+        # Convert the Checkpoint object into a real directory path
+        best_checkpoint_dir = best_checkpoint.to_directory()
+        with open(os.path.join(best_checkpoint_dir, "model_state_dict.pkl"), "rb") as f:
+            # best_state is already a dict with the model parameters
+            best_state = pickle.load(f)
+            torch.save(best_state, "best_l2o_model.pth")
+            print("Saved best L2O model to best_l2o_model.pth")
+
+def load_l2o_model(config_filename: str, state_dict_filename: str):
+    # 1. Load the hyperparameters from the JSON file
+    with open(config_filename, "r") as f:
+        best_config = json.load(f)
+
+    # 2. Recreate the model
+    l2o_net = L2OOptimizer(
+        hidden_size=best_config["hidden_size"],
+        linear_size=best_config["linear_size"],
+        num_layers=best_config["num_layers"],
+        p=best_config.get("p", 10)
+    )
+
+    # 3. Load the dictionary of parameters
+    best_state = torch.load(state_dict_filename, map_location="cpu")
+    l2o_net.load_state_dict(best_state)
+    l2o_net.eval()
+
+    return l2o_net
+def run_l2o_on_new_problem(l2o_net, A, mu, T=10, device="cpu"):
+    l2o_net.to(device)
+    A, mu = A.to(device), mu.to(device)
+    
+    batch_size, n, _ = A.shape
+    x = torch.zeros(batch_size, n, device=device, requires_grad=True)
+    
+    hidden = l2o_net.get_init_states(batch_size, n)
+    hidden = (hidden[0].to(device), hidden[1].to(device))
+    
+    # Use mean for consistency with training.
+    init_loss = quadratic(x, A, mu)
+    losses = []
+    
+    with torch.no_grad():
+        for step in range(T):
+            # Normalize loss just for reporting (optional if you want to track relative improvement)
+            vals=quadratic(x, A, mu)
+            loss = (vals / (init_loss + 1e-12)).mean()
+            losses.append(loss.item())
+            
+            # Normalize the gradient to match training
+            gradient = quadratic_grad(x, A, mu) 
+            grad= gradient/ (init_loss.reshape(-1,1) + 1e-12)
+            
+            x, hidden, _ = l2o_net(x, grad, hidden)
+    return x, losses
+if __name__ == "__main__":
+    config = {
+        "linear_size": tune.choice([4,8,16,32]),
+        "hidden_size": tune.choice([64,128,256]),
+        "num_layers":  tune.choice([1,2,3]),
+        "T":           tune.choice([20]),
+        "lr":          tune.loguniform(1e-4, 1e-2),
+        "num_epochs":  300
+    }
+    #run_tuning(config,num_samples=20)
+    model=load_l2o_model(config_filename="best_config.json", state_dict_filename="best_l2o_model.pth")
+    bs=64
+    n=15 
+    A=generate_random_quadratic(n=n,batch_size=bs)
+    mu=torch.randn(bs,n)*10
+    x, losses=run_l2o_on_new_problem(model, A, mu, T=1000, device="cpu")
+    print(losses)
