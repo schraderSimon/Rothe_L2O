@@ -111,7 +111,7 @@ def train_l2o(config):
     batch_size = 64
     nmin, nmax = 1, 20
     p = 10
-    perturb = 1.0
+    perturb = config["mu_std"]
 
     weights_T = torch.ones(T)
     weights_T[0] = 0
@@ -155,7 +155,7 @@ def train_l2o(config):
 
         optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(l2o_net.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(l2o_net.parameters(), 0.1)
         optimizer.step()
 
         current_train_loss = total_loss.item()
@@ -193,10 +193,10 @@ def run_tuning(config,num_samples=10):
     
 
     scheduler = ASHAScheduler(
-        metric="final_loss_20avg",
+        metric="train_loss_20avg",
         mode="min",
         max_t=config["num_epochs"],
-        grace_period=50,
+        grace_period=100,
         reduction_factor=2
     )
 
@@ -215,7 +215,7 @@ def run_tuning(config,num_samples=10):
         mode="min"
     )
     best_config = best_trial.config
-    with open("best_config.json", "w") as f:
+    with open("best_config.json_T=%d"%config["T"], "w") as f:
         json.dump(best_config, f, indent=2)
     if best_checkpoint is not None:
         # Convert the Checkpoint object into a real directory path
@@ -223,7 +223,7 @@ def run_tuning(config,num_samples=10):
         with open(os.path.join(best_checkpoint_dir, "model_state_dict.pkl"), "rb") as f:
             # best_state is already a dict with the model parameters
             best_state = pickle.load(f)
-            torch.save(best_state, "best_l2o_model.pth")
+            torch.save(best_state, "best_l2o_model_T=%d.pth"%config["T"])
             print("Saved best L2O model to best_l2o_model.pth")
 
 def load_l2o_model(config_filename: str, state_dict_filename: str):
@@ -268,7 +268,7 @@ def run_l2o_on_new_problem(l2o_net, A, mu, T=10, device="cpu"):
             
             # Normalize the gradient to match training
             gradient = quadratic_grad(x, A, mu) 
-            grad= gradient/ (init_loss.reshape(-1,1) + 1e-12)
+            grad= gradient/ (init_loss.reshape(-1,1)  + 1e-12)
             
             x, hidden, _ = l2o_net(x, grad, hidden)
     return x, losses
@@ -277,15 +277,9 @@ if __name__ == "__main__":
         "linear_size": tune.choice([4,8,16,32]),
         "hidden_size": tune.choice([64,128,256]),
         "num_layers":  tune.choice([1,2,3]),
-        "T":           tune.choice([20]),
+        "T":           20,
         "lr":          tune.loguniform(1e-4, 1e-2),
-        "num_epochs":  300
+        "num_epochs":  1000,
+        "mu_std": 10,
     }
-    #run_tuning(config,num_samples=20)
-    model=load_l2o_model(config_filename="best_config.json", state_dict_filename="best_l2o_model.pth")
-    bs=64
-    n=15 
-    A=generate_random_quadratic(n=n,batch_size=bs)
-    mu=torch.randn(bs,n)*10
-    x, losses=run_l2o_on_new_problem(model, A, mu, T=1000, device="cpu")
-    print(losses)
+    run_tuning(config,num_samples=100)
