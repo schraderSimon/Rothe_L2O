@@ -1,5 +1,4 @@
 import os
-import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,6 +6,7 @@ from collections import OrderedDict
 import json
 import ray
 from ray import tune
+import sys
 from ray.tune.schedulers import ASHAScheduler
 # Import the new session and Checkpoint objects
 from ray.tune import Checkpoint
@@ -14,6 +14,7 @@ from ray.tune import Checkpoint
 import tempfile
 import ray.cloudpickle as pickle
 # Define the shifted N-dimensional Rastrigin function.
+
 def generate_random_quadratic(n, batch_size):
     # Random symmetric matrix + diagonal shift for positive definiteness
     A = torch.randn(batch_size, n, n) #Random matrix
@@ -61,9 +62,6 @@ class L2OOptimizer(nn.Module):
         delta=torch.zeros(batch_size, n)
         grad_expanded=grad[:,:,None]
         p_exp=torch.exp(torch.tensor(self.p, dtype=grad_expanded.dtype, device=grad_expanded.device))
-        #mask = grad_expanded.abs() > 1/p_exp
-        #gradient_signs=torch.where(mask,grad_expanded.sign(),p_exp*grad_expanded)
-        #gradient_magnitudes=torch.where(mask,torch.log(grad_expanded.abs())/self.p,-torch.ones_like(grad_expanded))
         gradient_signs = grad_expanded.sign()
         gradient_magnitudes=torch.log(torch.abs(grad_expanded)+1e-16)
         inp_all=torch.cat([gradient_signs, gradient_magnitudes], dim=2)  # (batch_size, n, 2)
@@ -107,8 +105,9 @@ def train_l2o(config):
     T             = config["T"]
     learning_rate = config["lr"]
     num_epochs    = config["num_epochs"]
+    batch_size   = config["batch_size"]
+    wm= config["w_multiplier"]
 
-    batch_size = 64
     nmin, nmax = 1, 20
     p = 10
     perturb = config["mu_std"]
@@ -116,7 +115,7 @@ def train_l2o(config):
     weights_T = torch.ones(T)
     weights_T[0] = 0
     for i in range(1, T - 1):
-        weights_T[i+1] = weights_T[i]
+        weights_T[i+1] = weights_T[i]*wm
     weights_T = weights_T / weights_T.sum()
 
     l2o_net = L2OOptimizer(hidden_size, linear_size=linear_size, num_layers=num_layers, p=p)
@@ -149,7 +148,6 @@ def train_l2o(config):
                 final_loss_value = loss_step.item()
 
             if j < T-1:
-                #grad_ = torch.autograd.grad(loss_step, x, create_graph=True)[0]
                 grad_ = quadratic_grad(x, A, mu) / (init_loss.reshape(-1, 1) + 1e-12) / x.shape[0]
                 x, hidden, _ = l2o_net(x, grad_, hidden)
 
@@ -187,10 +185,8 @@ def train_l2o(config):
         else:
             tune.report(metrics)
 
-def run_tuning(config,num_samples=10):
+def run_tuning(config, num_samples=10, early_stopping_patience=3):
     ray.init()
-
-    
 
     scheduler = ASHAScheduler(
         metric="train_loss_20avg",
@@ -215,23 +211,20 @@ def run_tuning(config,num_samples=10):
         mode="min"
     )
     best_config = best_trial.config
-    with open("best_config.json_T=%d"%config["T"], "w") as f:
+    with open("best_config_T=%d_wM=%.2f.json" % (config["T"], config["w_multiplier"]), "w") as f:
         json.dump(best_config, f, indent=2)
     if best_checkpoint is not None:
-        # Convert the Checkpoint object into a real directory path
         best_checkpoint_dir = best_checkpoint.to_directory()
         with open(os.path.join(best_checkpoint_dir, "model_state_dict.pkl"), "rb") as f:
-            # best_state is already a dict with the model parameters
             best_state = pickle.load(f)
-            torch.save(best_state, "best_l2o_model_T=%d.pth"%config["T"])
+            torch.save(best_state, "best_l2o_model_T=%d_wM=%.2f.pth" % (config["T"], config["w_multiplier"]))
             print("Saved best L2O model to best_l2o_model.pth")
 
 def load_l2o_model(config_filename: str, state_dict_filename: str):
-    # 1. Load the hyperparameters from the JSON file
+   
     with open(config_filename, "r") as f:
         best_config = json.load(f)
 
-    # 2. Recreate the model
     l2o_net = L2OOptimizer(
         hidden_size=best_config["hidden_size"],
         linear_size=best_config["linear_size"],
@@ -239,7 +232,6 @@ def load_l2o_model(config_filename: str, state_dict_filename: str):
         p=best_config.get("p", 10)
     )
 
-    # 3. Load the dictionary of parameters
     best_state = torch.load(state_dict_filename, map_location="cpu")
     l2o_net.load_state_dict(best_state)
     l2o_net.eval()
@@ -255,31 +247,32 @@ def run_l2o_on_new_problem(l2o_net, A, mu, T=10, device="cpu"):
     hidden = l2o_net.get_init_states(batch_size, n)
     hidden = (hidden[0].to(device), hidden[1].to(device))
     
-    # Use mean for consistency with training.
     init_loss = quadratic(x, A, mu)
     losses = []
     
     with torch.no_grad():
         for step in range(T):
-            # Normalize loss just for reporting (optional if you want to track relative improvement)
             vals=quadratic(x, A, mu)
             loss = (vals / (init_loss + 1e-12)).mean()
             losses.append(loss.item())
             
-            # Normalize the gradient to match training
             gradient = quadratic_grad(x, A, mu) 
             grad= gradient/ (init_loss.reshape(-1,1)  + 1e-12)
             
             x, hidden, _ = l2o_net(x, grad, hidden)
     return x, losses
 if __name__ == "__main__":
+    T= int(sys.argv[1])
+    w_multiplier = float(sys.argv[2])
     config = {
         "linear_size": tune.choice([4,8,16,32]),
         "hidden_size": tune.choice([64,128,256]),
         "num_layers":  tune.choice([1,2,3]),
-        "T":           20,
+        "T":           T,
         "lr":          tune.loguniform(1e-4, 1e-2),
+        "batch_size": tune.choice([8,16,32, 64]),
         "num_epochs":  1000,
         "mu_std": 10,
+        "w_multiplier": w_multiplier,
     }
-    run_tuning(config,num_samples=100)
+    run_tuning(config,num_samples=128)
