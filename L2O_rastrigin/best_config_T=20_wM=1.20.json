@@ -1,0 +1,11 @@
+{
+  "linear_size": 32,
+  "hidden_size": 128,
+  "num_layers": 3,
+  "T": 20,
+  "lr": 0.006183990584304138,
+  "batch_size": 32,
+  "num_epochs": 200,
+  "mu_std": 10,
+  "w_multiplier": 1.2
+}

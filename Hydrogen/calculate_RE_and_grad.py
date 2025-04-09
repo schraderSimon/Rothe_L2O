@@ -1,20 +1,21 @@
 from time_evolution_and_optimization_frozen import *
-def sine_field_func(t):
-    omega=0.057
-    t_cycle = 2 * np.pi / omega
-    td = 3 * t_cycle
-    dt = t
-    pulse = (
-        (np.sin(np.pi * dt / td) ** 2)
-        * np.heaviside(dt, 1.0)
-        * np.heaviside(td - dt, 1.0)
-        * np.sin(omega * dt)
-        * E0
-    )
-    return pulse
-def fieldfunc(t):
-    return sine_field_func(t)
 def make_error_and_gradient_functions(E0,quality,t0):
+    def sine_field_func(t):
+        omega=0.057
+        t_cycle = 2 * np.pi / omega
+        td = 3 * t_cycle
+        dt = t
+        pulse = (
+            (np.sin(np.pi * dt / td) ** 2)
+            * np.heaviside(dt, 1.0)
+            * np.heaviside(td - dt, 1.0)
+            * np.sin(omega * dt)
+            * E0
+        )
+        return pulse
+    def fieldfunc(t):
+        return sine_field_func(t)
+
     h=0.2
     invR_mu=100
     omega=0.057
@@ -68,16 +69,16 @@ def make_error_and_gradient_functions(E0,quality,t0):
     optimizee_grad=create_wrapper(gradient_optimization, parameters_frozen)
     return optimizee,optimizee_grad,parameters
 
-
-E0=float(sys.argv[1])
-quality=int(sys.argv[2]) #1, 2 or 3
-t0=float(sys.argv[3])
-optimizee,optimizee_grad,parameters=make_error_and_gradient_functions(E0,quality,t0)
-from scipy.optimize import minimize
-error_initial=optimizee(parameters)
-grad_initial=optimizee_grad(parameters)
-print("Initial error: ", error_initial)
-print("Initial gradient: ", grad_initial)
-hess_inv0=np.diag(1/np.abs(grad_initial))
-result=minimize(optimizee,parameters,method="BFGS",jac=optimizee_grad,options={"hess_inv0":hess_inv0,"gtol":1e-10})
-print(result)
+if __name__=="__main__":
+    E0=float(sys.argv[1])
+    quality=int(sys.argv[2]) #1, 2 or 3
+    t0=float(sys.argv[3])
+    optimizee,optimizee_grad,parameters=make_error_and_gradient_functions(E0,quality,t0)
+    from scipy.optimize import minimize
+    error_initial=optimizee(parameters)
+    grad_initial=optimizee_grad(parameters)
+    print("Initial error: ", error_initial)
+    print("Initial gradient: ", grad_initial)
+    hess_inv0=np.diag(1/np.abs(grad_initial))
+    result=minimize(optimizee,parameters,method="BFGS",jac=optimizee_grad,options={"hess_inv0":hess_inv0,"gtol":1e-10})
+    print(result)
