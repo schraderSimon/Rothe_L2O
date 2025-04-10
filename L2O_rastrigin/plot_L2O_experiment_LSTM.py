@@ -68,7 +68,7 @@ def plot_optimizer_data(ax, method, wf_filter, T_filter):
 
     # Build the file pattern based on provided filters.
     pattern = f"LSTM_L2O_{method}_T={T_filter}_wM={wf_filter}.csv"
-    for file in glob.glob(pattern):
+    for file in sorted(glob.glob(pattern)):
         df_l2o = pd.read_csv(file)
         iters_l2o = df_l2o["iteration"]
 

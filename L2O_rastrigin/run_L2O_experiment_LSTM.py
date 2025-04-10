@@ -51,7 +51,7 @@ if __name__ == "__main__":
         main_experiment_l2o(T_training=T_training,wM=wM,type="training",dims=dims)
     elif type=="testing":
         dims=[21,50]
-        main_experiment_l2o(T_training=T_training,wM=wM,type="testing")
+        main_experiment_l2o(T_training=T_training,wM=wM,type="testing",dims=dims)
     else:
         print("Invalid type. Use 'training' or 'testing'.")
         sys.exit(1)
