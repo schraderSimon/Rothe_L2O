@@ -11,6 +11,9 @@ import calculate_RE_and_grad
 from calculate_RE_and_grad import make_error_and_gradient_functions
 import sys
 class EvaluateFunction(torch.autograd.Function):
+    """
+    This workaround was 100% stolen from ChatGPT and I do not claim that I know how it works.
+    """
     @staticmethod
     def forward(ctx, parameters, optimizee, optimizee_grad):
         """
@@ -20,11 +23,9 @@ class EvaluateFunction(torch.autograd.Function):
           - optimizee_grad: Callable that takes a 1D numpy array and returns its gradient.
         """
         parameters_np = parameters.detach().cpu().numpy()
-        losses = []
-        for sample in parameters_np:
-            loss_val = optimizee(sample)
-            losses.append(loss_val)
-        losses = np.array(losses)
+        losses=np.zeros(len(parameters_np))
+        for i,sample in enumerate(parameters_np):
+            losses[i] = optimizee(sample)
         # Save parameters and the gradient function for the backward pass.
         ctx.save_for_backward(parameters)
         ctx.optimizee_grad = optimizee_grad
@@ -60,7 +61,7 @@ class L2OOptimizer(nn.Module):
         self.h_0 = nn.Parameter(torch.randn(self.num_layers, hidden_size))  # Learnable hidden state
         self.c_0 = nn.Parameter(torch.randn(self.num_layers, hidden_size))  # Learnable cell state
         self.initial_transform = nn.Sequential(OrderedDict([ # Initial non-linear transformation
-            ("linear1", nn.Linear(2, linear_size)),
+            ("linear1", nn.Linear(8, linear_size)),
             ("nonlin1", nn.ReLU()),
             ("linear2", nn.Linear(linear_size, linear_size)),
         ]))
@@ -71,22 +72,23 @@ class L2OOptimizer(nn.Module):
         for _ in range(1, num_layers):
             self.lstm_cells.append(nn.LSTMCell(input_size=hidden_size, hidden_size=hidden_size)) #Add num_layers-1 LSTM cells, input size is hidden_size, hidden size is hidden_size
         
-        self.fc = nn.Linear(hidden_size, 1) #Final linear layer to output the perturbation
+        self.fc = nn.Linear(hidden_size, 4) #Final linear layer to output the perturbation
     def forward(self, x, grad, hidden_LSTM):
         batch_size, n = x.shape
-
-        new_hidden_h_layers = torch.zeros(batch_size, n, self.num_layers, self.hidden_size, device=x.device) #Array containing the new hidden states after forward pass
-        new_hidden_c_layers = torch.zeros(batch_size, n, self.num_layers, self.hidden_size, device=x.device) #Array containing the new cell states after forward pass
+        nd4=n//4
+        new_hidden_h_layers = torch.zeros(batch_size, nd4, self.num_layers, self.hidden_size, device=x.device) #Array containing the new hidden states after forward pass
+        new_hidden_c_layers = torch.zeros(batch_size, nd4, self.num_layers, self.hidden_size, device=x.device) #Array containing the new cell states after forward pass
 
         x_new=torch.zeros(batch_size, n) #Array containing the new optimizee
         delta=torch.zeros(batch_size, n) #Update in x in the forward pass
         grad_expanded=grad[:,:,None] #Reshaping for numerical reasons
         #size: (batch_size, n, 1)
-        gradient_signs = grad_expanded.sign()
-        gradient_magnitudes=torch.log(torch.abs(grad_expanded)+1e-16)
-        inp_all=torch.cat([gradient_signs, gradient_magnitudes], dim=2)  # (batch_size, n, 2)
-        inp_transformed = self.initial_transform(inp_all)  # (batch_size, n, linear_size)
 
+        grad_expanded_divided_by_gaussians=grad.reshape(batch_size,nd4,4)
+        gradient_signs = grad_expanded_divided_by_gaussians.sign()
+        gradient_magnitudes=torch.log(torch.abs(grad_expanded_divided_by_gaussians)+1e-16)
+        inp_all=torch.cat([gradient_signs, gradient_magnitudes], dim=2)  # (batch_size, n//4,8)
+        inp_transformed = self.initial_transform(inp_all)  # (batch_size, n//4, linear_size)
         inp_layer = inp_transformed # The first input to the LSTM is just the transformed input.
         for layer in range(self.num_layers):
             h_i = hidden_LSTM[0][:, :, layer, :]  
@@ -94,25 +96,28 @@ class L2OOptimizer(nn.Module):
 
             # Flatten batch_size and n into a single dimension for LSTM input
             # This essentially turns it into an "extra large batch" of size (batch_size * n)
-            inp_reshaped=inp_layer.view(batch_size * n, -1) # view is more efficient than reshape
-            h_i_reshaped=h_i.view(batch_size * n, -1)
-            c_i_reshaped=c_i.view(batch_size * n, -1)
+            inp_reshaped=inp_layer.view(batch_size * nd4, -1) # view is more efficient than reshape
+            h_i_reshaped=h_i.view(batch_size * nd4, -1)
+            c_i_reshaped=c_i.view(batch_size * nd4, -1)
+            #This line here causes issues
             h_new, c_new = self.lstm_cells[layer](inp_reshaped, (h_i_reshaped,  c_i_reshaped))
-            h_new = h_new.view(batch_size, n, -1)
-            c_new = c_new.view(batch_size, n, -1)
+            h_new = h_new.view(batch_size, nd4, -1)
+            c_new = c_new.view(batch_size, nd4, -1)
 
             new_hidden_h_layers[:, :, layer, :] = h_new # Store the new hidden state
             new_hidden_c_layers[:, :, layer, :] = c_new # Store the new cell state
             inp_layer = h_new   # Update the input for the next layer
 
-        delta = self.fc(h_new)[:, :, 0]*1e-4 # THIS FACTOR OF 1e-4 IS CRUCIAL FOR STABILITY
-        x_new = x + delta
+        output=self.fc(h_new) # Final output of the LSTM
+        
+        delta = output.reshape(batch_size, n) # Reshape to match the original input shape
+        x_new = x + delta*1e-5 #Factor of 1e-5 to ensure that the perturbation is small
         return x_new, (new_hidden_h_layers, new_hidden_c_layers), delta
 
 
     def get_init_states(self, batch_size, n):
-        h_0 = self.h_0[None,None,:,:].repeat(batch_size, n, 1, 1).contiguous()
-        c_0 = self.c_0[None,None,:,:].repeat(batch_size, n, 1, 1).contiguous()
+        h_0 = self.h_0[None,None,:,:].repeat(batch_size, n//4, 1, 1).contiguous()
+        c_0 = self.c_0[None,None,:,:].repeat(batch_size, n//4, 1, 1).contiguous()
         return (h_0, c_0)
 def train_l2o(config, create_output=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -142,13 +147,13 @@ def train_l2o(config, create_output=True):
         epochs = []
         train_loss = []
 
-    tvals = np.arange(5, 100, 0.2)
-
+    tvals = np.arange(50, 150, 0.2)
+    E0      = 0.06
     for epoch in range(num_epochs):
         t = np.random.choice(tvals)
         t0      = t
-        E0      = 0.06
-        quality = 1
+        
+        quality = 3
 
         # Get your black-box evaluate function, its gradient, and the initial parameters.
         optimizee, optimizee_grad, initial_parameters = make_error_and_gradient_functions(E0, quality, t0)
@@ -170,10 +175,10 @@ def train_l2o(config, create_output=True):
         parameters = initial_parameters.clone()
         for j in range(T):
             if j == 0:
-                f_val = initial_loss / (initial_loss + 1e-12)
+                f_val = initial_loss / (initial_loss + 1e-16)
             else:
                 current_loss = EvaluateFunction.apply(parameters, optimizee, optimizee_grad)
-                f_val = current_loss / (initial_loss + 1e-12)
+                f_val = current_loss / (initial_loss + 1e-16)
             loss_step = f_val.mean()
             total_loss = total_loss + loss_step * weights_T[j]
 
@@ -186,28 +191,28 @@ def train_l2o(config, create_output=True):
                     grad_i = optimizee_grad(parameters[i, :].detach().cpu().numpy())
                     grads_list.append(grad_i)
                 grads_tensor = torch.tensor(grads_list, dtype=torch.float32, device=device)
-                grad_ = grads_tensor / (initial_loss.view(-1, 1) + 1e-12) / parameters.shape[0]
+                grad_ = grads_tensor / (initial_loss.view(-1, 1) + 1e-16) / parameters.shape[0]
                 # The L2O network returns updated parameters, new hidden state, and (possibly) additional info.
                 parameters, hidden, _ = l2o_net(parameters, grad_, hidden)
 
-        print("Final loss value:", final_loss_value)
+        print("Final loss value: at iteration %d: "%epoch, final_loss_value)
         optimizer.zero_grad()
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(l2o_net.parameters(), 0.1)
         optimizer.step()
 if __name__ == "__main__":
     # Example usage
-    T = 5
+    T = 10
     w_multiplier = 1
 
     # Define the configuration for hyperparameter tuning
     config = {
-            "linear_size": 4,
-            "hidden_size": 64,
-            "num_layers":  1,
+            "linear_size": 32,
+            "hidden_size": 256,
+            "num_layers":  3,
             "T":           T,
-            "lr":          1e-3,
-            "batch_size":  16,
+            "lr":          0.00154,
+            "batch_size":  8,
             "num_epochs":  200,
             "w_multiplier": w_multiplier,
         }
