@@ -375,7 +375,7 @@ def train_l2o_realistic(config, create_output=True):
         l1_reg = 0.0
         l2_reg = 0.0
         for name, p in l2o.named_parameters():
-            if "weight" in name and:
+            if "weight" in name:
                 l1_reg += p.abs().sum()
                 l2_reg += p.pow(2).sum()
                 print(name)
