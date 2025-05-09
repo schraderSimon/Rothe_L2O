@@ -77,13 +77,24 @@ def plot_optimizer_data(ax, method, wf_filter, T_filter):
         parts = filename.split("_")
         T_str = parts[3].split("=")[1]
         wf_str = parts[4].split("=")[1].replace(".csv", "")
+        if int(T_str)==10:
+            color="purple"
+        elif int(T_str)==5:
+            color="magenta"
+        elif int(T_str)==20 and float(wf_str)==1.0:
+            color="brown"
+        elif int(T_str)==20 and float(wf_str)==1.2:
+            color="darkgoldenrod"
+        elif int(T_str)==20 and float(wf_str)==1.5:
+            color="deepskyblue"
         label = f"L2O T={T_str} k={wf_str}"
-        ax.plot(iters_l2o, df_l2o["L2O_q50"], label=label)
+        ax.plot(iters_l2o, df_l2o["L2O_q50"], label=label, color=color)
         ax.fill_between(
             iters_l2o,
             df_l2o["L2O_q25"],
             df_l2o["L2O_q75"],
-            alpha=0.2
+            alpha=0.2,
+            color=color
         )
 
     ax.set_yscale("log")
@@ -125,4 +136,3 @@ plt.savefig("plots/combined_results_T=%s_wM=%s.pdf" % (T_filter, wf_filter),
 plt.show()
 
 
-print("Combined plot saved as combined_results.png")
