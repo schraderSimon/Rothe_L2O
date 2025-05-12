@@ -21,5 +21,8 @@ q_data_2D=infile_2D['mu']
 q_data_3D=infile_3D['mu']
 p_data_2D=infile_2D['p']
 p_data_3D=infile_3D['p']
-plt.plot(times_3D, L_data_3D[:,0,:], label='L (first Gaussian)')
+
+print(L_data_2D.shape)
+print(L_data_3D.shape)
+plt.plot(times_2D, L_data_2D[:,0,:], label='L (first Gaussian)')
 plt.show()
