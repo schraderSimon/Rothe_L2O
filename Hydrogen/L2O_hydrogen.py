@@ -10,6 +10,74 @@ from collections import OrderedDict
 from calculate_RE_and_grad import make_error_and_gradient_functions
 torch.set_default_dtype(torch.float64)  # Rothe's method NEEDS double precision
 import sys
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Check-/re-load helpers
+# ──────────────────────────────────────────────────────────────────────────────
+import json, pathlib, datetime, torch, os
+
+def _run_directory(cfg: dict) -> pathlib.Path:
+    """Create /runs/<tag>/ where <tag> now also includes L1 and L2."""
+
+    tag = (
+        f"size{cfg['linear_size']}"
+        f"_layers{cfg['num_layers']}"
+        f"_lr{cfg['lr']}"
+        f"_bs{cfg['batch_size']}"
+        f"_l1{cfg['l1']}"            
+        f"_l2{cfg['l2']}"            
+        f"_tmin{cfg['tmin']}"
+        f"_tmax{cfg['tmax']}"
+    )
+    run_dir = pathlib.Path("runs") / tag
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    (run_dir / "config.json").write_text(json.dumps(cfg, indent=2))  
+    return run_dir
+
+def save_checkpoint(epoch: int,
+                    model: torch.nn.Module,
+                    optimizer: torch.optim.Optimizer,
+                    avg20_train_error: float,
+                    test_error: float,
+                    cfg: dict,
+                    root="runs") -> pathlib.Path:
+    """Called every 20 epochs."""
+    run_dir = _run_directory(cfg)
+    fname   = run_dir / f"ep{epoch:05d}.pt"
+
+    torch.save({
+        "epoch": epoch,
+        #"model_state": model.state_dict(), #Too much memory need, we don't need the model anyways (can always rerun the best model)
+        #"optim_state": optimizer.state_dict() #Too much memory need, we don't need the optimizer anyways
+        "avg20_train_error": avg20_train_error,
+        "test_error": test_error,
+        "config": cfg,
+    }, fname)
+
+    # also append one-line CSV for quick plotting
+    with open(run_dir / "log.csv", "a", encoding="utf-8") as fh:
+        fh.write(f"{epoch},{avg20_train_error:.6e},{test_error:.6e}\n")
+
+    return fname
+
+
+def load_checkpoint(path: str | pathlib.Path,
+                    model: torch.nn.Module,
+                    optimizer: torch.optim.Optimizer | None = None,
+                    map_location="cpu") -> int:
+    """
+    Restores the model (and optionally the optimiser) and returns the next
+    epoch you should train from.
+    """
+    ckpt = torch.load(path, map_location=map_location)
+    model.load_state_dict(ckpt["model_state"])
+    if optimizer is not None and "optim_state" in ckpt:
+        optimizer.load_state_dict(ckpt["optim_state"])
+    print(f"✔  Restored network from {path} (epoch {ckpt['epoch']})")
+    return ckpt["epoch"] + 1
+
+
 class EvaluateFunction(torch.autograd.Function):
     """
     This workaround was 100% stolen from ChatGPT and I do not claim that I know how it works.
@@ -151,7 +219,7 @@ class L2OOptimizer(nn.Module):
         h_0 = self.h_0[None,None,:,:].repeat(batch_size, n//4, 1, 1).contiguous()
         c_0 = self.c_0[None,None,:,:].repeat(batch_size, n//4, 1, 1).contiguous()
         return (h_0, c_0)
-def train_l2o(config, create_output=True):
+def train_l2o(config):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     linear_size   = config["linear_size"]
@@ -173,14 +241,8 @@ def train_l2o(config, create_output=True):
     l2o_net.to(device)
     optimizer = optim.Adam(l2o_net.parameters(), lr=learning_rate)
 
-    train_loss_buffer = []
-    final_loss_buffer = []
-    if create_output:
-        epochs = []
-        train_loss = []
-
     tvals = np.arange(100, 200, 0.2)
-    E0      = 0.03
+    E0      = 0.06
     for epoch in range(num_epochs):
         t = np.random.choice(tvals)
         t0      = t
@@ -299,7 +361,7 @@ def sample_realistic_batch(batch_size, t_pool, E0, quality):
 # ------------------------------------------------------------------------
 # 3.  The training loop – now *really* batched
 # ------------------------------------------------------------------------
-def train_l2o_realistic(config, create_output=True):
+def train_l2o_realistic(config,quality=1, E0=0.06,resume=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     linear_size   = config["linear_size"]
@@ -310,6 +372,11 @@ def train_l2o_realistic(config, create_output=True):
     num_epochs    = config["num_epochs"]
     batch_size    = config["batch_size"]
     wm            = config["w_multiplier"]
+    tmin= config["tmin"]
+    tmax= config["tmax"]
+    tmin_test= config["tmin_test"]
+    tmax_test= config["tmax_test"]
+    L1L2          = (config["l1"], config["l2"])
 
     # geometric weights over the unrolled steps
     weights_T = torch.ones(T, device=device)
@@ -320,14 +387,17 @@ def train_l2o_realistic(config, create_output=True):
 
     l2o = L2OOptimizer(hidden_size, linear_size=linear_size, num_layers=num_layers).to(device)
     opt = optim.Adam(l2o.parameters(), lr=lr)
-
+    if resume is not None:                     # ← NEW
+        start_epoch = load_checkpoint(resume, l2o, opt, device)
+    else:
+        start_epoch = 0
     # pool of candidate times (100 ≤ t < 200 in 0.2‑s steps)
-    t_pool = np.arange(50, 150., 0.2)
-    E0, quality = 0.06, 1
-
-    for epoch in range(num_epochs):
-        #E0=np.random.choice([0.03,0.06,0.12])
-        #quality= np.random.choice([1,2,3])
+    t_pool = np.arange(tmin, tmax, 0.2)
+    avg_20=[]
+    total_losses=[]
+    test_losses=[]
+    
+    for epoch in range(start_epoch, num_epochs):
         # ------------------------------------------------------------------
         # (a) realistic batch
         # ------------------------------------------------------------------
@@ -370,18 +440,19 @@ def train_l2o_realistic(config, create_output=True):
                 grad_norm = grads_t #/ (init_losses.view(-1, 1) + 1e-16)
 
                 parameters, hidden, _ = l2o(parameters, grad_norm, hidden)
-        lambda_l1=0
-        lambda_l2=1e-4
+        lambda_l1,lambda_l2=L1L2
         l1_reg = 0.0
         l2_reg = 0.0
         for name, p in l2o.named_parameters():
             if "weight" in name:
                 l1_reg += p.abs().sum()
                 l2_reg += p.pow(2).sum()
-                print(name)
-            if "scale" in name:
-                print(p)
-        print("Loss due to L2 regularization: %.3f"%(lambda_l2*l2_reg.item()))
+        avg_20.append(final_loss_value)
+        if len(avg_20)>20:
+            avg_20.pop(0)
+        avg_20_loss=np.mean(avg_20)
+        print("Loss due to  L1/L2 regularization: %.3f/%.3f"%(lambda_l1*l1_reg.item(),lambda_l2*l2_reg.item()))
+        total_losses.append(total_loss.item()) #The total loss without regularization
         total_loss = total_loss + lambda_l1 * l1_reg + lambda_l2 * l2_reg
         # ------------------------------------------------------------------
         # (c) optimise the L2O network
@@ -390,8 +461,77 @@ def train_l2o_realistic(config, create_output=True):
         total_loss.backward()
         opt.step()
 
-        print(f"[epoch {epoch:4d}] Time {times[0]:.1f}, mean final‑to‑initial loss ratio = "
-              f"{final_loss_value:6.4f}   (batch avg over {batch_size})")
+        print(f"[epoch {epoch:4d}] Time {times[0]:.1f}, nGauss: {parameters.shape[1]//4}, mean final‑to‑initial loss ratio = "
+              f"{final_loss_value:6.4f}, average over 20: {avg_20_loss:6.4f}   (batch avg over {batch_size})")
+        if epoch % 20 == 0:
+            test_times=np.array(np.linspace(201,330,20),dtype=int)
+            mean_ratio = evaluate_test_error(l2o, config,E0=E0, quality=quality,test_times=test_times, device=device)
+            test_losses.append(mean_ratio)
+            print(f"Mean final-to-initial loss ratio on test times: {mean_ratio:.6f}")
+
+            # ------------------------------------------------------------------
+            # NEW: save everything every 20th epoch
+            # ------------------------------------------------------------------
+            avg20 = avg_20_loss
+            save_checkpoint(epoch, l2o, opt, avg20, mean_ratio, config)
+
+@torch.no_grad()
+def evaluate_test_error(
+        l2o,
+        config,
+        test_times,   # 210, 220, …, 330
+        E0=0.06,
+        quality=1,
+        device=None,
+):
+    """
+    Evaluate the trained L2O network on a fixed grid of time points.
+    Every problem is solved *individually* (no batching), so the varying
+    number of Gaussians never causes shape clashes.
+    Returns the mean final-to-initial loss ratio across all test times.
+    """
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    l2o.eval()
+
+    T       = config["T"]
+    ratios  = []
+
+    for t in test_times:
+        optimisee, optimisee_grad, init_params = make_error_and_gradient_functions(
+            E0, quality, t
+        )
+
+        parameters = torch.tensor(init_params, dtype=torch.float64,
+                                  device=device).unsqueeze(0)
+        init_loss  = optimisee(init_params)             # scalar float
+        init_loss_t = torch.tensor([init_loss], dtype=torch.float64,
+                                   device=device)
+
+        hidden = l2o.get_init_states(1, parameters.size(1))
+        hidden = (hidden[0].to(device), hidden[1].to(device))
+
+        # ------------------ unroll the inner loop ----------------------
+        for j in range(T):
+            if j == 0:
+                f_val = init_loss_t / (init_loss_t + 1e-16)   # == 1
+            else:
+                curr_loss = optimisee(parameters[0].detach().cpu().numpy())
+                curr_loss_t = torch.tensor([curr_loss], dtype=torch.float64,
+                                           device=device)
+                f_val = curr_loss_t / (init_loss_t + 1e-16)
+
+            # take an L2O step except on final iteration
+            if j < T - 1:
+                grad_np  = optimisee_grad(parameters[0].detach().cpu().numpy())
+                grads_t  = torch.tensor(grad_np, dtype=torch.float64,
+                                        device=device).unsqueeze(0)
+                parameters, hidden, _ = l2o(parameters, grads_t, hidden)
+
+        # after T steps, f_val stores final-to-initial loss ratio
+        ratios.append(f_val.item())
+
+    l2o.train()      # restore training mode for continuing epochs
+    return float(np.mean(ratios))
 if __name__ == "__main__":
     # Example usage
     T = 5
@@ -399,16 +539,44 @@ if __name__ == "__main__":
     seed= 42
     torch.manual_seed(seed)
     np.random.seed(seed)
-    # Define the configuration for hyperparameter tuning
-    config = {
-            "linear_size": 64,
-            "hidden_size": 64,
-            "num_layers":  3,
-            "T":           T,
-            "lr":          0.01,
-            "batch_size":  8,
-            "num_epochs":  500,
-            "w_multiplier": w_multiplier,
-        }
+    quality=2
+    E0=0.06
+    tmin=100
+    tmax=200
 
-    train_l2o_realistic(config, create_output=True)
+    num_layers_considered=[3]
+    lr_considered=[1e-3,3e-3,1e-2]
+    l2_considered=[1e-5,1e-4,1e-3]
+    batchsize_considered=[1,2,4]
+    sizes_considered=[128,256,512]
+    # Define the configuration for hyperparameter tuning
+    counter=0
+    for i in range(len(lr_considered)):
+        lr=lr_considered[i]
+        for j in range(len(batchsize_considered)):
+            batchsize=batchsize_considered[j]
+            for k in range(len(sizes_considered)):
+                size=sizes_considered[k]
+                for m in range(len(l2_considered)):
+                    counter+=1
+                    l2=l2_considered[m]
+                    config = {
+                        "linear_size": size,
+                        "hidden_size": size,
+                        "num_layers":  3,
+                        "T":           T,
+                        "lr":          lr,
+                        "batch_size":  batchsize,
+                        "num_epochs":  500,
+                        "w_multiplier": 1,
+                        "l2":          l2,
+                        "l1":          0,
+                        "tmin":        tmin,
+                        "tmax":        tmax,
+                        "tmin_test": 201,
+                        "tmax_test": 330,
+                    }
+                    print("--------------------------------------------------------------------------------")
+                    print("Configuration %d: size=%d, batchsize=%d, lr=%.3e, l2=%.3e"%(counter,size,batchsize,lr,l2))
+                    print("--------------------------------------------------------------------------------")
+                    train_l2o_realistic(config,quality=quality, E0=E0)
