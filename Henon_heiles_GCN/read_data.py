@@ -24,5 +24,5 @@ p_data_3D=infile_3D['p']
 
 print(L_data_2D.shape)
 print(L_data_3D.shape)
-plt.plot(times_2D, L_data_2D[:,0,:], label='L (first Gaussian)')
+plt.plot(times_2D, L_data_3D[:,0,:], label='L (first Gaussian)')
 plt.show()

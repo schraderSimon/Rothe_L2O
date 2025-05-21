@@ -1,10 +1,10 @@
 {
-  "linear_size": 32,
-  "state_size": 128,
+  "linear_size": 8,
+  "state_size": 256,
   "rank": 2,
   "T": 20,
-  "lr": 0.0007514466764535901,
-  "batch_size": 8,
+  "lr": 0.001149131560886532,
+  "batch_size": 16,
   "num_epochs": 200,
   "mu_std": 10,
   "w_multiplier": 1.0

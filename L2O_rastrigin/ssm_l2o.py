@@ -273,7 +273,7 @@ if __name__ == "__main__":
     w_multiplier = float(sys.argv[2])
     config = {
         "linear_size": tune.choice([4, 8, 16, 32]),
-        "state_size": tune.choice([4, 8, 16]),
+        "state_size": tune.choice([32, 65, 128, 256]),
         "T": T,
         "lr": tune.loguniform(1e-4, 1e-2),
         "batch_size": tune.choice([8, 16, 32, 64]),

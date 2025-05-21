@@ -1,9 +1,9 @@
 {
-  "linear_size": 4,
-  "hidden_size": 128,
-  "num_layers": 2,
+  "linear_size": 8,
+  "state_size": 256,
+  "rank": 2,
   "T": 5,
-  "lr": 0.007016740971478688,
+  "lr": 0.002205425531892193,
   "batch_size": 8,
   "num_epochs": 200,
   "mu_std": 10,

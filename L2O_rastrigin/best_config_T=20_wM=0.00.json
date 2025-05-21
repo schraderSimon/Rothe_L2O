@@ -1,0 +1,10 @@
+{
+  "linear_size": 4,
+  "state_size": 65,
+  "T": 20,
+  "lr": 0.00013776392356000113,
+  "batch_size": 8,
+  "num_epochs": 200,
+  "mu_std": 10,
+  "w_multiplier": 0.0
+}

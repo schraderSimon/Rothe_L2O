@@ -77,7 +77,7 @@ def plot_optimizer_data(ax, method, wf_filter, T_filter):
         parts = filename.split("_")
         T_str = parts[3].split("=")[1]
         wf_str = parts[4].split("=")[1].replace(".csv", "")
-        label = f"L2O T={T_str} k={wf_str}"
+        label = f"n-SSM T={T_str} k={wf_str}"
         ax.plot(iters_l2o, df_l2o["L2O_q50"], label=label)
         ax.fill_between(
             iters_l2o,
