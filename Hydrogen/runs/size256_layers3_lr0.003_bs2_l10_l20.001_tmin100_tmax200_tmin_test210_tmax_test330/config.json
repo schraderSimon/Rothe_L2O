@@ -1,0 +1,16 @@
+{
+  "linear_size": 256,
+  "hidden_size": 256,
+  "num_layers": 3,
+  "T": 10,
+  "lr": 0.003,
+  "batch_size": 2,
+  "num_epochs": 500,
+  "w_multiplier": 1,
+  "l2": 0.001,
+  "l1": 0,
+  "tmin": 100,
+  "tmax": 200,
+  "tmin_test": 210,
+  "tmax_test": 330
+}

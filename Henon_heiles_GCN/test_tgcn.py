@@ -67,7 +67,7 @@ def preprocess_data(L_data, K_data, mu_data, p_data, seq_len, train_timesteps):
     assert K_data.shape[:2] == mu_data.shape[:2] == p_data.shape[:2] == (num_timesteps, num_gaussians), \
         "Inconsistent shapes among L, K, mu, p"
     assert train_timesteps <= num_timesteps, f"train_timesteps ({train_timesteps}) exceeds available timesteps ({num_timesteps})"
-    assert num_coefficients == 10, f"Expected 10 coefficients per Gaussian, got {num_coefficients}"
+    assert num_coefficients == 10, f"Expected 10 coefficients per Gaussian, got {num_coefficients}" 
     
     # Limit to train_timesteps
     L_data = L_data[:train_timesteps]

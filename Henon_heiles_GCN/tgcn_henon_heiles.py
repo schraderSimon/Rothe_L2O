@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from torch_geometric_temporal.nn import GConvGRU
+from torch_geometric_temporal.nn import GConvGRU, TGCN,TGCN2
 from torch_geometric.utils import dense_to_sparse
 
 # Build Adjacency Matrix and Convert to Edge Index
@@ -30,10 +30,10 @@ def build_adjacency_matrix(num_gaussians, num_coefficients):
     return edge_index
 
 # T-GCN Model with GConvGRU
-class TGCN(nn.Module):
+class TGCNmod(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_nodes):
-        super(TGCN, self).__init__()
-        self.gconv_gru = GConvGRU(in_channels=in_channels, out_channels=hidden_channels, K=2)  # Chebyshev filter
+        super(TGCNmod, self).__init__()
+        self.gconv_gru = TGCN(in_channels=in_channels, out_channels=hidden_channels)  # Chebyshev filter
         self.fc = nn.Linear(hidden_channels, out_channels)
         self.hidden_channels = hidden_channels
         self.num_nodes = num_nodes
@@ -116,7 +116,7 @@ def train_tgcn(L_data, K_data, mu_data, p_data, num_gaussians, seq_len=12, batch
     in_channels = 1
     hidden_channels = 64
     out_channels = 1
-    model = TGCN(in_channels, hidden_channels, out_channels, num_nodes).to(device)
+    model = TGCNmod(in_channels, hidden_channels, out_channels, num_nodes).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     loss_fn = nn.MSELoss()
 
@@ -139,7 +139,7 @@ def train_tgcn(L_data, K_data, mu_data, p_data, num_gaussians, seq_len=12, batch
             total_loss += loss.item()
             num_batches += 1
         
-        if epoch % 1 == 0:
+        #if epoch % 1 == 0:
             avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
             print(f"Epoch {epoch}, Average Loss: {avg_loss:.4f}")
 
