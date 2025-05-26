@@ -12,9 +12,6 @@ torch.set_default_dtype(torch.float64)  # Rothe's method NEEDS double precision
 import sys
 file_exists = lambda path: os.path.isfile(path)
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  Check-/re-load helpers
-# ──────────────────────────────────────────────────────────────────────────────
 import json, pathlib, datetime, torch, os
 
 def _run_directory(cfg: dict) -> pathlib.Path:
@@ -31,6 +28,8 @@ def _run_directory(cfg: dict) -> pathlib.Path:
         f"_tmax{cfg['tmax']}"
         f"_tmin_test{cfg['tmin_test']}"
         f"_tmax_test{cfg['tmax_test']}"
+        f"quality_{cfg['quality']}"
+        f"E0_{cfg['E0']}"
     )
     run_dir = pathlib.Path("runs") / tag
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -62,8 +61,6 @@ def save_checkpoint(epoch: int,
     else:
         torch.save({
             "epoch": epoch,
-            #"model_state": model.state_dict(), #Too much memory need, we don't need the model anyways (can always rerun the best model)
-            #"optim_state": optimizer.state_dict() #Too much memory need, we don't need the optimizer anyways
             "avg20_train_error": avg20_train_error,
             "test_error": test_error,
             "config": cfg,
@@ -121,6 +118,7 @@ class EvaluateFunction(torch.autograd.Function):
         return grad_tensor, None, None
 class BatchEvaluate(torch.autograd.Function):
     """Vectorised version of EvaluateFunction for heterogeneous optimisees."""
+    """Also stolen from ChatGPT, and I do not understand it anymore than I did before."""
     @staticmethod
     def forward(ctx, parameters, optimisees, optimisee_grads):
         """
@@ -155,8 +153,7 @@ class L2OOptimizer(nn.Module):
         self.num_layers = num_layers
         self.h_0 = nn.Parameter(torch.randn(self.num_layers, hidden_size))  # Learnable hidden state
         self.c_0 = nn.Parameter(torch.randn(self.num_layers, hidden_size))  # Learnable cell state
-        self.scale=((torch.tensor(scale)))  # Learnable scale parameter, initialized to 1e-5
-        #self.scale=torch.tensor(scale)
+        self.scale=((torch.tensor(scale)))
         self.initial_transform = nn.Sequential(OrderedDict([ # Initial non-linear transformation
             ("linear1", nn.Linear(8, linear_size)),
             ("nonlin1", nn.ReLU()),
@@ -172,7 +169,7 @@ class L2OOptimizer(nn.Module):
         self.fc = nn.Linear(hidden_size, 4) #Final linear layer to output the perturbation
     def forward(self, x, grad, hidden_LSTM):
         batch_size, n = x.shape
-        nd4=n//4
+        nd4=n//4 #Number of Gaussians
         new_hidden_h_layers = torch.zeros(batch_size, nd4, self.num_layers, self.hidden_size, device=x.device) #Array containing the new hidden states after forward pass
         new_hidden_c_layers = torch.zeros(batch_size, nd4, self.num_layers, self.hidden_size, device=x.device) #Array containing the new cell states after forward pass
 
@@ -194,7 +191,6 @@ class L2OOptimizer(nn.Module):
             inp_reshaped=inp_layer.view(batch_size * nd4, -1) # view is more efficient than reshape
             h_i_reshaped=h_i.view(batch_size * nd4, -1)
             c_i_reshaped=c_i.view(batch_size * nd4, -1)
-            #This line here causes issues
             h_new, c_new = self.lstm_cells[layer](inp_reshaped, (h_i_reshaped,  c_i_reshaped))
             h_new = h_new.view(batch_size, nd4, -1)
             c_new = c_new.view(batch_size, nd4, -1)
@@ -207,9 +203,9 @@ class L2OOptimizer(nn.Module):
         
         delta = output.reshape(batch_size, n) # Reshape to match the original input shape
         ngauss=delta.shape[1]//4
-        scale_exp = self.scale.repeat(ngauss)          # (n,) – still linked to the Parameter
-        delta_scaled = delta *torch.exp(scale_exp)    # broadcasting keeps the same result
-        x_new = x + delta_scaled #Factor to ensure that the output is small
+        scale_exp = self.scale.repeat(ngauss)         #Proper reshaping so it can be multiplied with deltaf
+        delta_scaled = delta *torch.exp(scale_exp)    
+        x_new = x + delta_scaled 
         return x_new, (new_hidden_h_layers, new_hidden_c_layers), delta
 
 
@@ -226,9 +222,6 @@ def evaluate_batch(params, optimisees, optimisee_grads):
     return BatchEvaluate.apply(params, optimisees, optimisee_grads)
 
 
-# ------------------------------------------------------------------------
-# 2.  A helper that draws a *valid* batch of realistic problems
-# ------------------------------------------------------------------------
 def sample_realistic_batch(batch_size, t_pool, E0, quality):
     """
     Returns
@@ -238,7 +231,7 @@ def sample_realistic_batch(batch_size, t_pool, E0, quality):
         init_losses    : (B,) float64 tensor on CPU
     """
     while True:
-        # pick a starting time far enough from the upper bound
+        # pick a random starting time (respecting the batch size)
         t0 = np.random.choice(t_pool[: len(t_pool) - batch_size])
         times = t0 + 0.2 * np.arange(batch_size)
 
@@ -257,9 +250,6 @@ def sample_realistic_batch(batch_size, t_pool, E0, quality):
                     torch.tensor(init_losses, dtype=torch.float64))
 
 
-# ------------------------------------------------------------------------
-# 3.  The training loop – now *really* batched
-# ------------------------------------------------------------------------
 def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -277,9 +267,8 @@ def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
     tmax_test= config["tmax_test"]
     L1L2          = (config["l1"], config["l2"])
 
-    # geometric weights over the unrolled steps
-    weights_T = torch.ones(T, device=device)
-    weights_T[0] = 0.
+    weights_T = torch.ones(T, device=device) #Using w=1 for all steps
+    weights_T[0] = 0. # This is zero because we don't want to include the first step which always one
     for i in range(1, T - 1):
         weights_T[i+1] = weights_T[i] * wm
     weights_T /= weights_T.sum()
@@ -297,8 +286,11 @@ def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
         # ------------------------------------------------------------------
         # (a) realistic batch
         # ------------------------------------------------------------------
+        if E0 == "all":
+            E0_val=np.random.choice([0.03,0.06,0.12])
+            print("E0_val: %.2f"%E0_val)
         (times,parameters, optimisees, opt_grads,
-         init_losses) = sample_realistic_batch(batch_size, t_pool, E0, quality)
+         init_losses) = sample_realistic_batch(batch_size, t_pool, E0_val, quality)
 
         parameters  = parameters.to(device)                          # (B, P)
         init_losses = init_losses.to(device)                         # (B,)
@@ -350,9 +342,9 @@ def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
         print("Loss due to  L1/L2 regularization: %.3f/%.3f"%(lambda_l1*l1_reg.item(),lambda_l2*l2_reg.item()))
         total_losses.append(total_loss.item()) #The total loss without regularization
         total_loss = total_loss + lambda_l1 * l1_reg + lambda_l2 * l2_reg
-        # ------------------------------------------------------------------
-        # (c) optimise the L2O network
-        # ------------------------------------------------------------------
+
+
+
         opt.zero_grad()
         total_loss.backward()
         opt.step()
@@ -360,14 +352,13 @@ def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
         print(f"[epoch {epoch:4d}] Time {times[0]:.1f}, nGauss: {parameters.shape[1]//4}, mean final‑to‑initial loss ratio = "
               f"{final_loss_value:6.4f}, average over 20: {avg_20_loss:6.4f}   (batch avg over {batch_size})")
         if epoch % 20 == 0:
-            test_times=np.array(np.linspace(tmin_test,tmax_test,20),dtype=int)
-            mean_ratio = evaluate_test_error(l2o, config,E0=E0, quality=quality,test_times=test_times, device=device)
+            test_times=np.array(np.linspace(tmin_test,tmax_test,7),dtype=int)
+            mean_ratio = 0
+            for E0_val in [0.03,0.06,0.12]:
+                mean_ratio += evaluate_test_error(l2o, config,E0=E0_val, quality=quality,test_times=test_times, device=device)
+            mean_ratio /= 3
             test_losses.append(mean_ratio)
             print(f"Mean final-to-initial loss ratio on test times: {mean_ratio:.6f}")
-
-            # ------------------------------------------------------------------
-            # NEW: save everything every 20th epoch
-            # ------------------------------------------------------------------
             avg20 = avg_20_loss
             save_checkpoint(epoch, l2o, opt, avg20, mean_ratio, config,save_params=save_params)
 
@@ -375,7 +366,7 @@ def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
 def evaluate_test_error(
         l2o,
         config,
-        test_times,   # 210, 220, …, 330
+        test_times, 
         E0=0.06,
         quality=1,
         device=None,
@@ -406,7 +397,6 @@ def evaluate_test_error(
         hidden = l2o.get_init_states(1, parameters.size(1))
         hidden = (hidden[0].to(device), hidden[1].to(device))
 
-        # ------------------ unroll the inner loop ----------------------
         for j in range(T):
             if j == 0:
                 f_val = init_loss_t / (init_loss_t + 1e-16)   # == 1
@@ -416,17 +406,15 @@ def evaluate_test_error(
                                            device=device)
                 f_val = curr_loss_t / (init_loss_t + 1e-16)
 
-            # take an L2O step except on final iteration
             if j < T - 1:
                 grad_np  = optimisee_grad(parameters[0].detach().cpu().numpy())
                 grads_t  = torch.tensor(grad_np, dtype=torch.float64,
                                         device=device).unsqueeze(0)
                 parameters, hidden, _ = l2o(parameters, grads_t, hidden)
 
-        # after T steps, f_val stores final-to-initial loss ratio
         ratios.append(f_val.item())
 
-    l2o.train()      # restore training mode for continuing epochs
+    l2o.train()   
     return float(np.mean(ratios))
 if __name__ == "__main__":
     T = 10
@@ -434,19 +422,19 @@ if __name__ == "__main__":
     seed= 42
     torch.manual_seed(seed)
     np.random.seed(seed)
-    quality=2
-    E0=0.06
-    tmin=100
-    tmax=200
-    tmin_test=210
-    tmax_test=330
+    quality=1
+    E0="all"
+    tmin=180
+    tmax=260
+    tmin_test=260
+    tmax_test=280
     num_layers_considered=[3]
-    lr_considered=[1e-3,3e-3,1e-2]
-    l2_considered=[1e-3,1e-4,1e-5,1e-2]
+    lr_considered=[3e-4,1e-3,3e-3,1e-2,1e-4]
+    l2_considered=[1e-6,1e-5,1e-4]
     batchsize_considered=[1,2]
     sizes_considered=[256]
-    # Define the configuration for hyperparameter tuning
     counter=0
+    num_epochs=1000
     for i in range(len(lr_considered)):
         lr=lr_considered[i]
         for j in range(len(batchsize_considered)):
@@ -463,7 +451,7 @@ if __name__ == "__main__":
                         "T":           T,
                         "lr":          lr,
                         "batch_size":  batchsize,
-                        "num_epochs":  500,
+                        "num_epochs":  num_epochs,
                         "w_multiplier": 1,
                         "l2":          l2,
                         "l1":          0,
@@ -471,6 +459,8 @@ if __name__ == "__main__":
                         "tmax":        tmax,
                         "tmin_test": tmin_test,
                         "tmax_test": tmax_test,
+                        "quality":     quality,
+                        "E0":         E0,
                     }
                     cfg=config
                     tag = (
@@ -484,10 +474,13 @@ if __name__ == "__main__":
                     f"_tmax{cfg['tmax']}"
                     f"_tmin_test{cfg['tmin_test']}"
                     f"_tmax_test{cfg['tmax_test']}"
+                    f"quality_{cfg['quality']}"
+                    f"E0_{cfg['E0']}"
                 )
                     mapname="runs/"+tag
                     if os.path.exists(mapname):
-                        if "ep480.pt" in os.listdir(mapname):
+                        val=num_epochs-20
+                        if "ep%d.pt"%val in os.listdir(mapname):
                             print("Configuration %d: size=%d, batchsize=%d, lr=%.3e, l2=%.3e already trained"%(counter,size,batchsize,lr,l2))
                             continue
                     print("--------------------------------------------------------------------------------")

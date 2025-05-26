@@ -16,8 +16,6 @@ from L2O_hydrogen import *
 seed = 42
 num_samples= 50
 T_max = 100
-quality_def = 2
-E0_def = 0.06
 def bfgs_scipy_run(
     f: Callable[[np.ndarray], float],
     grad: Callable[[np.ndarray], np.ndarray],
@@ -62,12 +60,16 @@ def bfgs_scipy_run(
     return ratios
 
 
-def generate_dataset(time_points: np.ndarray, quality: int = quality_def) -> np.ndarray:
+def generate_dataset(time_points, quality,E0) -> np.ndarray:
     data = np.empty((len(time_points), T_max), dtype=np.float64)
     for i, t in enumerate(time_points):
-        f, g, x0 = make_error_and_gradient_functions(E0_def, quality, t)
+        if E0 == "all":
+            E0_val = np.random.choice([0.03, 0.06, 0.12])
+        else:
+            E0_val = E0
+        f, g, x0 = make_error_and_gradient_functions(E0_val, quality, t)
         data[i, :] = bfgs_scipy_run(f, g, x0)
-        print(i)
+        print(E0_val,i)
     return data
 
 np.random.seed(seed)
@@ -75,7 +77,7 @@ if torch is not None:
     torch.manual_seed(seed)
 
 _cfg_narrow = {"tmin": 180, "tmax": 200, "tmin_test": 200, "tmax_test": 210}
-_cfg_wide   = {"tmin": 100, "tmax": 200, "tmin_test": 210, "tmax_test": 330}
+_cfg_wide   = {"tmin": 180, "tmax": 260, "tmin_test": 260, "tmax_test": 280}
 
 _grid = lambda lo, hi: np.arange(lo, hi + 1, 0.2)
 
@@ -84,15 +86,16 @@ test_narrow  = np.random.choice(_grid(_cfg_narrow["tmin_test"], _cfg_narrow["tma
 val_narrow   = np.random.choice(_grid(210, 250), num_samples, replace=False)
 train_wide   = np.random.choice(_grid(_cfg_wide["tmin"], _cfg_wide["tmax"]), num_samples, replace=False)
 test_wide    = np.random.choice(_grid(_cfg_wide["tmin_test"], _cfg_wide["tmax_test"]), num_samples, replace=False)
+val_wide     = np.random.choice(_grid(280, 330), num_samples, replace=False)
 output_dir = "results_L2O"
 
 narrow_file = "%s/BFGS_narrow.npz"% output_dir
 if not file_exists(narrow_file):
-    train_data= generate_dataset(train_narrow)
+    train_data= generate_dataset(train_narrow,quality=2,E0=0.06)
     print("Done 1")
-    test_data = generate_dataset(test_narrow)
+    test_data = generate_dataset(test_narrow,quality=2,E0=0.06)
     print("Done 2")
-    val_data  = generate_dataset(val_narrow)
+    val_data  = generate_dataset(val_narrow,quality=2,E0=0.06)
     print("Done 3")
     np.savez(
         narrow_file,
@@ -107,24 +110,33 @@ else:
 alt_file =   "%s/BFGS_narrow2.npz"% output_dir
 if not file_exists(alt_file):
     
-    np.savez(alt_file, val2=generate_dataset(train_narrow, quality=3))
+    np.savez(alt_file, val2=generate_dataset(train_narrow, quality=3, E0=0.06))
     print("Done 4")
 else:
     print("Skipping narrow data2 generation")
-# Broad / wide split
-broad_file = "%s/BFGS_broad.npz"% output_dir
-if not file_exists(broad_file):
-    train_data= generate_dataset(train_wide)
+
+
+wide_file = "%s/BFGS_wide.npz"% output_dir
+if not file_exists(wide_file):
+    train_data = generate_dataset(train_wide, quality=1, E0="all")
     print("Done 5")
-    test_data = generate_dataset(test_wide)
+    test_data  = generate_dataset(test_wide, quality=1, E0="all")
     print("Done 6")
+    val_data   = generate_dataset(val_wide, quality=1, E0="all")
+    print("Done 7")
     np.savez(
-        broad_file,
+        wide_file,
         train=train_data,
         test=test_data,
+        val=val_data,
     )
-
 else:
-    print("Skipping wide generation")
-
-print("Done.")
+    print("Skipping wide data generation")
+# Alt‑validation (quality=2)
+alt_wide_file = "%s/BFGS_wide2.npz"% output_dir
+if not file_exists(alt_wide_file):
+    np.savez(alt_wide_file, val2=generate_dataset(train_wide, quality=2, E0="all"))
+    print("Done 8")
+else:
+    print("Skipping wide data2 generation")
+print("All datasets generated successfully.")

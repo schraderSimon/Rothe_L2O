@@ -53,7 +53,7 @@ def analyze_runs(tmin, tmax, tmin_test, tmax_test):
             best_run = run.name
 
     for i, (train, label) in enumerate(zip(all_train, labels)):
-        plt.plot(epochs,train, label=label)
+        plt.plot(epochs,train[-len(epochs):], label=label)
     plt.title("Train Error")
     plt.xlabel("Checkpoint index")
     plt.ylabel("Train error")
@@ -65,7 +65,7 @@ def analyze_runs(tmin, tmax, tmin_test, tmax_test):
     plt.show()
 
     for i, (test, label) in enumerate(zip(all_test, labels)):
-        plt.plot(epochs,test, label=label)
+        plt.plot(epochs,test[-len(epochs):], label=label)
     plt.title("Test Error")
     plt.xlabel("Checkpoint index")
     plt.ylabel("Test error")
@@ -81,8 +81,8 @@ def analyze_runs(tmin, tmax, tmin_test, tmax_test):
     print("Best config:", json.dumps(best_config, indent=2))
 
 if __name__ == "__main__":
-    tmin=100
-    tmax=200
-    tmin_test=210
-    tmax_test=330
+    tmin=180
+    tmax=260
+    tmin_test=260
+    tmax_test=280
     analyze_runs(tmin=tmin, tmax=tmax, tmin_test=tmin_test, tmax_test=tmax_test)

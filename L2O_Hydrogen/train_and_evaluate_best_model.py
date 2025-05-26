@@ -1,14 +1,16 @@
 from L2O_hydrogen import *
-def test_l2o_model(l2o, test_times, quality=2, E0=0.06):
+def test_l2o_model(l2o, test_times, quality, E0=0.06):
 
     device = ("cuda" if torch.cuda.is_available() else "cpu")
     l2o.eval()
     T=100 #Test over 100 steps
     run_data=np.zeros((len(test_times), T), dtype=np.float64)
     for i,t in enumerate(test_times):
-        optimisee, optimisee_grad, init_params = make_error_and_gradient_functions(
-            E0, quality, t
-        )
+        if E0=="all":
+            E0_val=np.random.choice([0.03,0.06,0.12])
+        else:
+            E0_val=E0
+        optimisee, optimisee_grad, init_params = make_error_and_gradient_functions(E0_val, quality, t)
 
         parameters = torch.tensor(init_params, dtype=torch.float64,
                                   device=device).unsqueeze(0)
@@ -38,7 +40,7 @@ def test_l2o_model(l2o, test_times, quality=2, E0=0.06):
 
         # after T steps, f_val stores final-to-initial loss ratio
         # and parameters stores the final parameters
-            print(i,j, f_val.item())
+            print(E0_val,t,i,j, f_val.item())
             run_data[i, j] = f_val.item()
 
     return run_data
@@ -103,7 +105,9 @@ config_narrow=config= {
   "tmin": 180,
   "tmax": 200,
   "tmin_test": 200,
-  "tmax_test": 210
+  "tmax_test": 210,
+  "quality": 2, #Quality of the data to generate
+    "E0": 0.06 #Initial energy
 }
 seed=42
 torch.manual_seed(seed)
@@ -129,25 +133,30 @@ if os.path.exists(mapname):
         print("Narrow model already trained")
     else:
         train_l2o_realistic(config,quality=quality, E0=E0,save_params=True)
-    l2o_narrow, _ = load_model_from_config(config, epoch=980)
+    best_epoch=820
+    l2o_narrow, _ = load_model_from_config(config, epoch=best_epoch)
 from L2O_hydrogen import *
+
+
 
 ###WIDE MODEL - best parameters
 config_wide=config={
-  "linear_size": 256,
+"linear_size": 256,
   "hidden_size": 256,
   "num_layers": 3,
   "T": 10,
-  "lr": 0.01,
-  "batch_size": 2,
+  "lr": 0.001,
+  "batch_size": 1,
   "num_epochs": 1000,
   "w_multiplier": 1,
-  "l2": 0.01,
+  "l2": 1e-06,
   "l1": 0,
-  "tmin": 100,
-  "tmax": 200,
-  "tmin_test": 210,
-  "tmax_test": 330
+  "tmin": 180,
+  "tmax": 260,
+  "tmin_test": 260,
+  "tmax_test": 280,
+  "quality": 1,
+  "E0": "all"
 }
 
 
@@ -156,14 +165,15 @@ torch.manual_seed(seed)
 np.random.seed(seed)
 
 cfg=config
-tag="size256_layers3_lr0.01_bs2_l10_l20.01_tmin100_tmax200_tmin_test210_tmax_test330"
+tag="size256_layers3_lr0.001_bs1_l10_l21e-06_tmin180_tmax260_tmin_test260_tmax_test280quality_1E0_all"
 mapname="runs/"+tag
 if os.path.exists(mapname):
     if "ep980.pt" in os.listdir(mapname):
         print("wide model lready trained")
     else:
-        train_l2o_realistic(config,quality=quality, E0=E0,save_params=True)
-    l2o_broad, _ = load_model_from_config(config, epoch=980,tag=tag )
+        train_l2o_realistic(config,quality=config_wide["quality"], E0=config_wide["E0"],save_params=True)
+    best_epoch=840
+    l2o_wide, _ = load_model_from_config(config, epoch=best_epoch,tag=tag )
 num_samples=50
 training_range_narrow=np.random.choice(np.arange(config_narrow["tmin"], config_narrow["tmax"]+1,0.2),num_samples,replace=False)
 test_range_narrow=np.random.choice(np.arange(config_narrow["tmin_test"], config_narrow["tmax_test"]+1,0.2),num_samples,replace=False)
@@ -171,25 +181,37 @@ validation_range_narrow=np.random.choice(np.arange(210, 250,0.2),num_samples,rep
 import os
 file_exists = lambda path: os.path.isfile(path)
 if not file_exists("results_L2O/narrow_data.npz"):
-    narrow_train_data = test_l2o_model(l2o_narrow, training_range_narrow, quality=quality, E0=E0)
-    narrow_test_data = test_l2o_model(l2o_narrow, test_range_narrow, quality=quality, E0=E0)
-    narrow_val_data = test_l2o_model(l2o_narrow, validation_range_narrow, quality=quality, E0=E0)
+    narrow_train_data = test_l2o_model(l2o_narrow, training_range_narrow, quality=config_narrow["quality"], E0=config_narrow["E0"])
+    narrow_test_data = test_l2o_model(l2o_narrow, test_range_narrow, quality=config_narrow["quality"], E0=config_narrow["E0"])
+    narrow_val_data = test_l2o_model(l2o_narrow, validation_range_narrow, quality=config_narrow["quality"], E0=config_narrow["E0"])
     np.savez("results_L2O/narrow_data",train=narrow_train_data, test=narrow_test_data, val=narrow_val_data)
 else:
     print("File already exists, skipping narrow model data generation")
     
 if not file_exists("results_L2O/narrow_data2.npz"):
-    narrov_val_data2=test_l2o_model(l2o_narrow, training_range_narrow, quality=3, E0=E0) #Use a different quality for the validation set
+    narrov_val_data2=test_l2o_model(l2o_narrow, training_range_narrow, quality=3, E0=config_narrow["E0"]) #Use a different quality for the validation set
     np.savez("results_L2O/narrow_data2",val2=narrov_val_data2)
 else:
     print("File already exists, skipping narrow model data2 generation")
+
+
+
 training_range_wide=np.random.choice(np.arange(config_wide["tmin"], config_wide["tmax"]+1,0.2),num_samples,replace=False)
-
 test_range_wide=np.random.choice(np.arange(config_wide["tmin_test"], config_wide["tmax_test"]+1,0.2),num_samples,replace=False)
+validation_range_1_wide=np.random.choice(np.arange(280, 330,0.2),num_samples,replace=False)
+validation_range_2_wide=training_range_wide
+validation_quality_2_wide=2
 
-wide_train_data = test_l2o_model(l2o_broad, training_range_wide, quality=quality, E0=E0)
-wide_test_data = test_l2o_model(l2o_broad, test_range_wide, quality=quality, E0=E0)
 if not file_exists("results_L2O/wide_data.npz"):
-    np.savez("results_L2O/wide_data",train=wide_train_data, test=wide_test_data)
+    narrow_train_data = test_l2o_model(l2o_wide, training_range_wide, quality=config_wide["quality"], E0=config_wide["E0"])
+    narrow_test_data = test_l2o_model(l2o_wide, test_range_wide, quality=config_wide["quality"], E0=config_wide["E0"])
+    narrow_val_data = test_l2o_model(l2o_wide, validation_range_1_wide, quality=config_wide["quality"], E0=config_wide["E0"])
+    np.savez("results_L2O/wide_data",train=narrow_train_data, test=narrow_test_data, val=narrow_val_data)
 else:
     print("File already exists, skipping wide model data generation")
+    
+if not file_exists("results_L2O/wide_data2.npz"):
+    narrov_val_data2=test_l2o_model(l2o_wide, validation_range_2_wide, quality=validation_quality_2_wide, E0=config_wide["E0"]) #Use a different quality for the validation set
+    np.savez("results_L2O/wide_data2",val2=narrov_val_data2)
+else:
+    print("File already exists, skipping wide model data2 generation")
