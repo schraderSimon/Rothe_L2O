@@ -26,10 +26,8 @@ def build_adjacency_matrix(num_gaussians, num_coefficients):
             #    adj[other_idx, node_idx] = 1
     
     adj.fill_diagonal_(0)  # Remove self-loops
-    #edge_index, _ = dense_to_sparse(adj)  # [2, num_edges]
     return adj
 
-# T-GCN Model with GConvGRU
 class own_TGCN(nn.Module):
     def __init__(self,num_layers_GCN,num_layers_LSTM,size_LSTM,size_GCN,size_GCN_out,adjacency_matrix,num_nodes,run_GCN=True,T=5):
         super(own_TGCN, self).__init__()
@@ -48,7 +46,6 @@ class own_TGCN(nn.Module):
             print("Warning: run_GCN is set to False. The GCN layers will not be used.")
             self.size_GCN_out = 1  # Set to 1 if GCN is not used, so LSTM can still work
             size_GCN_out = 1  # Set GCN size to 1 if not used
-        # ----- build convolution matrix (unchanged) -----
         A = torch.tensor(adjacency_matrix) if not torch.is_tensor(adjacency_matrix) else adjacency_matrix
         assert A.size(0) == A.size(1), "Adjacency matrix must be square"
         assert A.size(0) == num_nodes, f"Adjacency matrix size {A.size(0)} does not match num_nodes {num_nodes}"
@@ -66,7 +63,6 @@ class own_TGCN(nn.Module):
             self.gcn_layers.append(nn.Linear(size_GCN, size_GCN))
         self.gcn_layers.append(nn.Linear(size_GCN, size_GCN_out)) 
 
-        # ----- LSTM now sees N * size_GCN_out features ----------
         self.lstm = nn.LSTM(input_size=num_nodes * size_GCN_out, 
                             hidden_size=size_LSTM,
                             num_layers=num_layers_LSTM,
@@ -74,21 +70,16 @@ class own_TGCN(nn.Module):
 
         self.fc = nn.Linear(size_LSTM, num_nodes)  # unchanged
         self.fc_alpha = nn.Linear(size_LSTM, T)   #
-    # ------------------------------------------------------------------
     def forward_gcn(self, x):
-        # x is of shape [batch_size, num_nodes, 1]
         for layer in self.gcn_layers:               
             x = torch.matmul(self.convolution_matrix, x) 
             x = torch.relu(layer(x))                            
         return x                                        
 
-    # ------------------------------------------------------------------
     def forward(self, x):
-        # x: [batch, T, num_nodes, 1]
         batch_size, seq_len, num_nodes, _ = x.shape
         assert seq_len == self.T, "input window must equal T"
 
-        # ------------ run (optional) GCN -----------------
         x_flat = x.reshape(batch_size * seq_len, num_nodes, 1) 
         if self.run_GCN:
             x_flat = self.forward_gcn(x_flat)
@@ -108,15 +99,13 @@ def preprocess_data(L_data, K_data, mu_data, p_data,train_timesteps):
     dparams=params[1:,:,:] - params[:-1,:,:]  
     params_train=dparams[:train_timesteps,:,:] 
     params_test=dparams[train_timesteps:,:,:]
-    #params_train=params[:train_timesteps,:,:]
-    #params_test=params[train_timesteps:,:,:]
     mean = params_train.mean(axis=0, keepdims=True)
     std = params_train.std(axis=0, keepdims=True) 
     params_train_normalized = (params_train - mean) / (std + 1e-14)
     params_test_normalized = (params_test - mean) / (std + 1e-14)
     return params_train_normalized, params_test_normalized, mean, std
 
-def train_model(train_data, cfg,adjaceny_matrix,test_data):
+def train_model(train_data, cfg,adjaceny_matrix,test_data,save_model=False,save_output=True):
     num_layers_GCN = cfg['num_layers_GCN']
     num_layers_LSTM = cfg['num_layers_LSTM']
     size_LSTM = cfg['size_LSTM']
@@ -124,6 +113,14 @@ def train_model(train_data, cfg,adjaceny_matrix,test_data):
     size_GCN_out = cfg['size_GCN_out']
     num_nodes = cfg['num_nodes']
     run_GCN = cfg['run_GCN']
+    l2_penalty = cfg['l2_penalty']
+    T=cfg["T"] #Unrolling parameter; i.e. on how many previous deltas the model is trained
+    num_epochs= cfg['num_epochs']
+    batch_size = cfg['batch_size']
+    filename="outputs/"
+    for key, value in sorted(cfg.items()):
+        filename += f"{key}={value}_"
+    filename = filename[:-1] + ".txt"  # Remove the last underscore and add .pt
     model= own_TGCN(
         num_layers_GCN=num_layers_GCN,
         num_layers_LSTM=num_layers_LSTM,
@@ -140,39 +137,58 @@ def train_model(train_data, cfg,adjaceny_matrix,test_data):
     opt = torch.optim.Adam(model.parameters(), lr=cfg['learning_rate'])
     criterion = nn.MSELoss()
     model.train()
-    T=cfg["T"] #Unrolling parameter; i.e. on how many previous deltas the model is trained
-    num_epochs= cfg['num_epochs']
-    batch_size = cfg['batch_size']
+    
+    
     indices_testing=list(range(test_data.shape[0] - T))
+    test_data_batch = torch.stack([test_data[s : s + T, :, :] for s in indices_testing], dim=0)
     idiot_prediction=torch.stack([test_data[s + T-1, :, :] for s in indices_testing], dim=0) #We simply predict the previous change
     desired_output_test = torch.stack([test_data[s + T, :, :] for s in indices_testing], dim=0) #We simply predict 
     idiot_error=criterion(desired_output_test,idiot_prediction)
-    for epoch in range(cfg['num_epochs']):
+    training_avg_20= []
+    if save_output:
+        #Make sure the file exists and is empty
+        with open(filename, 'w') as f:
+            f.write("Epoch, train Loss, test loss\n")
+    test_losses= []
+    for epoch in range(num_epochs):
         start_idx=np.random.randint(0, train_data.shape[0] - T - 1,size=batch_size)
         train_data_batch = torch.stack([train_data[s : s + T, :, :] for s in start_idx], dim=0)
         desired_output = torch.stack([train_data[s + T, :, :] for s in start_idx], dim=0)
         output, _ = model(train_data_batch)          # unpack
 
         loss = criterion(output, desired_output)  
-        
-        if True:
-            print(f'Epoch [{epoch + 1}/{cfg["num_epochs"]}], Loss: {loss.item():.4f}')
+        training_avg_20.append(loss.item())
+        if len(training_avg_20) > 20:
+            training_avg_20.pop(0)        
         for name, param in model.named_parameters():
             if 'weight' in name:
-                loss += 1e-5* torch.sum(param ** 2)
+                loss += l2_penalty* torch.sum(param ** 2)
         opt.zero_grad()  # clean the slate  
         loss.backward()  # compute gradients  
-        opt.step()       # update parameters 
-        if (epoch+1) % 5 == 0 or epoch == 0:  # Print every 5 epochs (adjust as you like)
+        opt.step()       # update parameters
+        
+        if (epoch+1) % 20 == 0 or epoch == 0:  # Print every 5 epochs (adjust as you like)
+            print(f'Epoch [{epoch + 1}/{cfg["num_epochs"]}], Loss: {loss.item():.4f}')
+            training_avg= np.mean(training_avg_20)
             model.eval()
-            losses = []
             with torch.no_grad():
-                
-                test_data_batch = torch.stack([test_data[s : s + T, :, :] for s in indices_testing], dim=0)
-                
                 output_test,_ = model(test_data_batch)
                 loss = criterion(output_test, desired_output_test)
-            print(f'Test Loss (MSE, average over test set): {loss.item():.4f}, Idiotic: {idiot_error.item():.4f}')
+                testloss= loss.item()
+                test_losses.append(testloss)
+                idiotloss=idiot_error.item()
+            print(f'Test Loss (MSE, average over test set): {testloss}, Idiotic: {idiotloss:.4f}')
+            if save_output:
+                with open(filename, 'a') as f:
+                    f.write(f"{epoch + 1}, {np.mean(training_avg):.4f}, {loss.item():.4f}\n")
+            biggerthanlast10= False  # If there are less than 10 test losses, we assume the model is still learning
+            for i in range(1,12):  # Check if the last 10 test losses are bigger than the current one
+                if len(test_losses) >= i and testloss<test_losses[-i]:
+                    biggerthanlast10=False
+            
+            if (idiotloss< testloss and epoch > 500) or (3*idiotloss<testloss and epoch>200) or biggerthanlast10:  # If the idiot prediction is better than the model prediction even after a lot of epochs
+                print("Warning: Idiot prediction is better than model prediction, or no more learning. Cancelling training.")
+                break
             model.train()
     return model
 if __name__ == "__main__":
@@ -201,7 +217,7 @@ if __name__ == "__main__":
     adjaceny_matrix= build_adjacency_matrix(num_gaussians=num_gaussians, num_coefficients=num_coefficients)
     train_timesteps = 5000  # Number of timesteps to use for training
     params_train, params_test_and_valid, mean, std = preprocess_data(L_data, K_data, mu_data, p_data, train_timesteps)
-    params_test=params_test_and_valid[:500,:,:]
+    params_test=params_test_and_valid[0:100,:,:]
     print(params_test.shape)
     cfg = {
         'num_epochs': 2000,
@@ -215,5 +231,6 @@ if __name__ == "__main__":
         "size_GCN_out": 1,
         "num_nodes": num_nodes,
         "run_GCN": True,
+        "L2_penalty": 1e-5,  # L2 regularization term
     }
-    model = train_model(params_train, cfg,adjaceny_matrix,params_test)
+    model = train_model(params_train, cfg,adjaceny_matrix,params_test,save_output=False)
