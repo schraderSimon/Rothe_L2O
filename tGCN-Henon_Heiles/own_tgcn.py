@@ -1,8 +1,26 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import copy
+import os
+import sys
 torch.set_default_tensor_type(torch.DoubleTensor)
 import matplotlib.pyplot as plt
+def _build_filename(cfg: dict, ext = ".pt", epoch = None, base_dir: str = "outputs/") -> str:
+    cfg_local = copy.deepcopy(cfg)
+    if epoch is not None:
+        cfg_local["num_epochs"] = epoch
+
+    parts = [f"{k}={cfg_local[k]}" for k in sorted(cfg_local.keys())]
+    fname = "_".join(parts) + ext
+    return os.path.join(base_dir, fname)
+
+
+def save_model(model: torch.nn.Module, cfg: dict, epoch: int, base_dir: str = "outputs/") -> str:  # noqa: D401
+    os.makedirs(base_dir, exist_ok=True)
+    path = _build_filename(cfg, ext=".pt", epoch=epoch, base_dir=base_dir)
+    torch.save(model.state_dict(), path)
+    return path
 
 # Build Adjacency Matrix and Convert to Edge Index
 def build_adjacency_matrix(num_gaussians, num_coefficients):
@@ -105,7 +123,7 @@ def preprocess_data(L_data, K_data, mu_data, p_data,train_timesteps):
     params_test_normalized = (params_test - mean) / (std + 1e-14)
     return params_train_normalized, params_test_normalized, mean, std
 
-def train_model(train_data, cfg,adjaceny_matrix,test_data,save_model=False,save_output=True):
+def train_model(train_data, cfg,adjaceny_matrix,test_data,save_model_state=None,save_output=True):
     num_layers_GCN = cfg['num_layers_GCN']
     num_layers_LSTM = cfg['num_layers_LSTM']
     size_LSTM = cfg['size_LSTM']
@@ -166,7 +184,11 @@ def train_model(train_data, cfg,adjaceny_matrix,test_data,save_model=False,save_
         opt.zero_grad()  # clean the slate  
         loss.backward()  # compute gradients  
         opt.step()       # update parameters
-        
+        if save_model_state is not None and save_model_state != False:
+            if epoch==save_model_state: 
+                save_model(model, cfg, epoch=save_model_state, base_dir="outputs/")
+                print("Saved model state at epoch", save_model_state)
+                sys.exit(0)  # Exit after saving the model state
         if (epoch+1) % 20 == 0 or epoch == 0:  # Print every 5 epochs (adjust as you like)
             print(f'Epoch [{epoch + 1}/{cfg["num_epochs"]}], Loss: {loss.item():.4f}')
             training_avg= np.mean(training_avg_20)

@@ -31,9 +31,10 @@ if __name__ == "__main__":
     T=[5,10, 20]  # Different unrolling parameters to test
     hidden_sizes=[64, 128, 256]  # Different hidden sizes to test
     run_GCNs=[False,True]  # Whether to run GCNs or not
-    L2_penalties=[1e-6,1e-5, 1e-4]  # Different L2 penalties to test
+    L2_penalties=[1e-4,1e-3,1e-2]  # Different L2 penalties to test
     num_layers_GCNs=[2, 3]  # Different number of GCN layers to test
     num_layers_LSTMs=[1,2, 3]  # Different number of LSTM layers to test
+    #num_layers_LSTMs=[2]
     learning_rates= [1e-3]  # Different learning rates to test
     for run_GCN in run_GCNs:
             for learning_rate in learning_rates:
@@ -69,4 +70,4 @@ if __name__ == "__main__":
                                             print(f"Skipping existing configuration: {filename}")
                                             continue
                                         print(f"Training with params: {cfg}")
-                                        model = train_model(params_train, cfg,adjaceny_matrix,params_test,save_model=False,save_output=True)
+                                        model = train_model(params_train, cfg,adjaceny_matrix,params_test,save_model_state=False,save_output=True)
