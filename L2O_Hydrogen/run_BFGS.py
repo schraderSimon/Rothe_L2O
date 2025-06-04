@@ -10,10 +10,6 @@ import torch  # only needed for RNG parity with the L2O script
 
 from L2O_hydrogen import * 
 
-# ----------------------------------------------------------------------------
-# Hyper‑parameters ------------------------------------------------------------
-# ----------------------------------------------------------------------------
-seed = 42
 num_samples= 50
 T_max = 100
 def bfgs_scipy_run(f,grad,x0,max_iter = T_max):
