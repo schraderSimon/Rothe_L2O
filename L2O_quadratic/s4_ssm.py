@@ -13,17 +13,18 @@ import tempfile
 import ray.cloudpickle as pickle
 import numpy as np
 
-# Quadratic function
-def generate_random_quadratic(n, batch_size):
+##------------------ Helper Functions ----------------- ##
+
+def generate_random_quadratic(n, batch_size): # Random matrix
     A = torch.randn(batch_size, n, n)
     A = torch.einsum('bij,bkj->bik', A, A)
     return A
 
-def quadratic(x, A, mu):
+def quadratic(x, A, mu): # Compute (x-mu)^T A (x-mu)
     xminmu = x - mu
     return torch.einsum('bi,bij,bj->b', xminmu, A, xminmu)
 
-def quadratic_grad(x, A, mu):
+def quadratic_grad(x, A, mu): # Compute 2A(x-mu)
     xminmu = x - mu
     return 2.0 * torch.einsum('bij,bj->bi', A, xminmu)
 
@@ -35,7 +36,7 @@ class L2OOptimizer(nn.Module):
         self.linear_size = linear_size
         self.rank = rank
         
-        # Initial transformation (same as SSM)
+        # Initial transformation (same as SSM / LSTM)
         self.initial_transform = nn.Sequential(OrderedDict([
             ("linear1", nn.Linear(2, linear_size)),
             ("nonlin1", nn.ReLU()),
@@ -70,7 +71,7 @@ class L2OOptimizer(nn.Module):
         h_new = torch.tanh(h_new)  # Non-linearity
         h_new = h_new / (h_new.norm(dim=1, keepdim=True) + 1e-5)  # Normalize for stability
         
-        # Output delta
+        # Output delta, delta = C * h
         delta = (h_new @ self.C).view(batch_size, n)  # (batch_size, n)
         x_new = x + delta
         
@@ -84,13 +85,13 @@ class L2OOptimizer(nn.Module):
         return h_0
 
 # Training function for Ray Tune
-def train_l2o_tune(config):
+def train_l2o_tune(config): # training loop
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    linear_size = config["linear_size"]
-    state_size = config["state_size"]
-    rank = config["rank"]
-    T = config["T"]
+    linear_size = config["linear_size"] # size of B
+    state_size = config["state_size"] # size of A, C and V
+    rank = config["rank"] # size of B and V (projection)
+    T = config["T"] # unrolling depth
     learning_rate = config["lr"]
     num_epochs = config["num_epochs"]
     batch_size = config["batch_size"]
@@ -290,7 +291,7 @@ if __name__ == "__main__":
         "mu_std": 10,
         "w_multiplier": w_multiplier,
     }
-    
+## ----------------------- TUNING --------------------- ## 
     # Run tuning
     ray.init()
     scheduler = ASHAScheduler(

@@ -13,17 +13,18 @@ import tempfile
 import ray.cloudpickle as pickle
 import numpy as np
 
-# Quadratic function
-def generate_random_quadratic(n, batch_size):
+## ------------------ Helper Functions ----------------- ##
+
+def generate_random_quadratic(n, batch_size): # Random matrix
     A = torch.randn(batch_size, n, n)
     A = torch.einsum('bij,bkj->bik', A, A)
     return A
 
-def quadratic(x, A, mu):
+def quadratic(x, A, mu): # Compute (x-mu)^T A (x-mu)
     xminmu = x - mu
     return torch.einsum('bi,bij,bj->b', xminmu, A, xminmu)
 
-def quadratic_grad(x, A, mu):
+def quadratic_grad(x, A, mu): # Compute 2A(x-mu)
     xminmu = x - mu
     return 2.0 * torch.einsum('bij,bj->bi', A, xminmu)
 
@@ -34,6 +35,7 @@ class L2OOptimizer(nn.Module):
         self.state_size = state_size
         
         # Initial transformation (same as LSTM)
+        # This might be redundant, but should not affect the results obtained using this model
         self.initial_transform = nn.Sequential(OrderedDict([
             ("linear1", nn.Linear(2, linear_size)),
             ("nonlin1", nn.ReLU()),
@@ -41,9 +43,9 @@ class L2OOptimizer(nn.Module):
         ]))
         
         # SSM parameters
-        self.A = nn.Parameter(torch.randn(state_size, state_size) * 0.01)  # State transition
-        self.B = nn.Parameter(torch.randn(linear_size, state_size))  # Input projection
-        self.C = nn.Parameter(torch.randn(state_size, 1))  # Output projection
+        self.A = nn.Parameter(torch.randn(state_size, state_size) * 0.01)  # State transition, A - full rank
+        self.B = nn.Parameter(torch.randn(linear_size, state_size))  # Input projection, B - full rank
+        self.C = nn.Parameter(torch.randn(state_size, 1))  # Output projection, C - full rank
         
         # Initial state
         self.h_0 = nn.Parameter(torch.zeros(state_size))
@@ -60,11 +62,11 @@ class L2OOptimizer(nn.Module):
         inp_flat = inp_transformed.view(batch_size * n, -1)  # (batch_size * n, linear_size)
         h_prev = hidden.view(batch_size * n, -1)  # (batch_size * n, state_size)
         
-        # SSM update: h_t = A * h_{t-1} + B * u_t
+        # SSM update: h_t = A * h_{t-1} + B * u_t (simplest form)
         h_new = h_prev @ self.A + inp_flat @ self.B  # (batch_size * n, state_size)
-        h_new = torch.tanh(h_new)  # Non-linearity
+        h_new = torch.tanh(h_new)  # Non-linearity 
         
-        # Output delta
+        # Output delta, delta = C * h
         delta = (h_new @ self.C).view(batch_size, n)  # (batch_size, n)
         x_new = x + delta
         
@@ -78,12 +80,12 @@ class L2OOptimizer(nn.Module):
         return h_0
 
 # Training function for Ray Tune
-def train_l2o_tune(config):
+def train_l2o_tune(config): # training loop for SSM optimizer
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    linear_size = config["linear_size"]
-    state_size = config["state_size"]
-    T = config["T"]
+    linear_size = config["linear_size"] # size of matrix B
+    state_size = config["state_size"] # sizes of matrices A, C
+    T = config["T"] # unrolling depth
     learning_rate = config["lr"]
     num_epochs = config["num_epochs"]
     batch_size = config["batch_size"]
@@ -99,10 +101,12 @@ def train_l2o_tune(config):
     
     l2o_net = L2OOptimizer(state_size, linear_size=linear_size)
     l2o_net.to(device)
-    optimizer = optim.Adam(l2o_net.parameters(), lr=learning_rate)
+    optimizer = optim.Adam(l2o_net.parameters(), lr=learning_rate) # use ADAM to learn the parameters
     
     train_loss_buffer = []
     final_loss_buffer = []
+    
+    # training loop
     for epoch in range(num_epochs):
         n = int(torch.randint(nmin, nmax + 1, (1,))[0])
         hidden = l2o_net.get_init_states(batch_size, n).to(device)
@@ -121,10 +125,10 @@ def train_l2o_tune(config):
             loss_step = f_val.mean()
             total_loss += loss_step * weights_T[j]
             
-            if j == T - 1:
+            if j == T - 1: # redundant use of if-statements
                 final_loss_value = loss_step.item()
             
-            if j < T - 1:
+            if j < T - 1: # unrolling per epoch - this is the heart of the training sequence
                 grad_ = quadratic_grad(x, A, mu) / (init_loss.reshape(-1, 1) + 1e-12) / x.shape[0]
                 x, hidden, _ = l2o_net(x, grad_, hidden)
         
@@ -241,7 +245,7 @@ def train_l2o(config, create_output=True):
             np.savez(outfilename, epochs=epochs, train_loss=train_loss)
 
 # Run L2O on a new problem
-def run_l2o_on_new_problem(l2o_net, A, mu, T=10, device="cpu"):
+def run_l2o_on_new_problem(l2o_net, A, mu, T=10, device="cpu"): # generate testing and validation problems
     l2o_net.to(device)
     A, mu = A.to(device), mu.to(device)
     
@@ -267,7 +271,7 @@ def run_l2o_on_new_problem(l2o_net, A, mu, T=10, device="cpu"):
 
 # Main execution
 if __name__ == "__main__":
-    seed = 42
+    seed = 42 # for reproductibility
     torch.manual_seed(seed)
     T = int(sys.argv[1])
     w_multiplier = float(sys.argv[2])
@@ -282,6 +286,7 @@ if __name__ == "__main__":
         "w_multiplier": w_multiplier,
     }
     
+##----------------------- TUNING-----------------------------------
     # Run tuning
     ray.init()
     scheduler = ASHAScheduler(
