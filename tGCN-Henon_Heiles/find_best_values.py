@@ -2,10 +2,9 @@ import os
 import re
 import numpy as np
 from own_tgcn import *
-T = 5  # Set your T value here
-run_GCN = True  # Set your run_GCN value here
+T = 5  #Could be read from terminal, but this is lazy mode
+run_GCN = True 
 
-# Directory containing the output files
 output_dir = "outputs"
 
 # Build regex to match correct files
@@ -24,7 +23,7 @@ for fname in os.listdir(output_dir):
     full_path = os.path.join(output_dir, fname)
     test_losses = []
     with open(full_path, "r") as f:
-        next(f)  # Skip header
+        next(f)  
         for line in f:
             parts = line.strip().split(",")
             if len(parts) < 3:
@@ -51,7 +50,6 @@ if best_filename is not None:
 else:
     print("No matching files found.")
 if best_filename is not None:
-    # Extract parameters from filename
     param_pattern = (
     r"T=(\d+)_"
     r"batch_size=(\d+)_"
@@ -120,10 +118,10 @@ num_coefficients=L_data.shape[2]+K_data.shape[2] + mu_data.shape[2] + p_data.sha
 num_gaussians=L_data.shape[1]
 num_nodes= num_gaussians * num_coefficients
 adjaceny_matrix= build_adjacency_matrix(num_gaussians=num_gaussians, num_coefficients=num_coefficients)
-train_timesteps = 1000  # Number of timesteps to use for training
+train_timesteps = 1000  
 params_train, params_test_and_valid, mean, std = preprocess_data(L_data, K_data, mu_data, p_data, train_timesteps)
 params_test=params_test_and_valid[0:200,:,:]
-torch.manual_seed(42)  # For reproducibility
-np.random.seed(42)  # For reproducibility
+torch.manual_seed(42)  
+np.random.seed(42)  
 
 model = train_model(params_train, cfg,adjaceny_matrix,params_test,save_output=False,save_model_state=best_epoch)

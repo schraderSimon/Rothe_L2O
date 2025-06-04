@@ -16,12 +16,7 @@ from L2O_hydrogen import *
 seed = 42
 num_samples= 50
 T_max = 100
-def bfgs_scipy_run(
-    f: Callable[[np.ndarray], float],
-    grad: Callable[[np.ndarray], np.ndarray],
-    x0: np.ndarray,
-    max_iter: int = T_max,
-) -> np.ndarray:
+def bfgs_scipy_run(f,grad,x0,max_iter = T_max):
     """Run SciPy BFGS, capture *fₖ / f₀* at each iteration (max_iter ≤ 100)."""
     f0 = f(x0)
     g0 = grad(x0)
@@ -30,7 +25,7 @@ def bfgs_scipy_run(
     ratios = np.full(max_iter, np.nan, dtype=np.float64)
     ratios[0] = 1.0
 
-    def cb(xk: np.ndarray):
+    def cb(xk): #Callback function to capture the ratio fₖ / f₀
         idx = cb.k
         if idx < max_iter:
             ratios[idx] = f(xk) / f0
@@ -46,8 +41,7 @@ def bfgs_scipy_run(
         callback=cb,
         options={
             "maxiter": max_iter,
-            "gtol": 0.0,      
-            "disp": False,
+            "gtol": 0.0,      # Run as long as possible
             "hess_inv0": H0,  
         },
     )
@@ -73,8 +67,7 @@ def generate_dataset(time_points, quality,E0) -> np.ndarray:
     return data
 
 np.random.seed(seed)
-if torch is not None:
-    torch.manual_seed(seed)
+torch.manual_seed(seed)
 
 _cfg_narrow = {"tmin": 180, "tmax": 200, "tmin_test": 200, "tmax_test": 210}
 _cfg_wide   = {"tmin": 180, "tmax": 260, "tmin_test": 260, "tmax_test": 280}

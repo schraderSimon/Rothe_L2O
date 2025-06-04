@@ -28,4 +28,3 @@ for filename in os.listdir(input_dir):
 
         compress_hdf5(input_path, output_path)
 
-print("✅ All HDF5 files compressed!")

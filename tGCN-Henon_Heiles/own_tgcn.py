@@ -1,3 +1,7 @@
+"""
+THIS FILE CONTAINS THE IMPLEMENTATION OF THE TGCN MODEL.
+"""
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,7 +10,7 @@ import os
 import sys
 torch.set_default_tensor_type(torch.DoubleTensor)
 import matplotlib.pyplot as plt
-def _build_filename(cfg: dict, ext = ".pt", epoch = None, base_dir: str = "outputs/") -> str:
+def _build_filename(cfg: dict, ext = ".pt", epoch = None, base_dir: str = "outputs/"):
     cfg_local = copy.deepcopy(cfg)
     if epoch is not None:
         cfg_local["num_epochs"] = epoch
@@ -16,7 +20,7 @@ def _build_filename(cfg: dict, ext = ".pt", epoch = None, base_dir: str = "outpu
     return os.path.join(base_dir, fname)
 
 
-def save_model(model: torch.nn.Module, cfg: dict, epoch: int, base_dir: str = "outputs/") -> str:  # noqa: D401
+def save_model(model: torch.nn.Module, cfg: dict, epoch: int, base_dir: str = "outputs/"): 
     os.makedirs(base_dir, exist_ok=True)
     path = _build_filename(cfg, ext=".pt", epoch=epoch, base_dir=base_dir)
     torch.save(model.state_dict(), path)
@@ -52,8 +56,8 @@ class own_TGCN(nn.Module):
         self.num_layers_GCN = num_layers_GCN
         self.num_layers_LSTM = num_layers_LSTM
         self.size_LSTM = size_LSTM
-        self.size_GCN = size_GCN
-        self.size_GCN_out = size_GCN_out       # store
+        self.size_GCN = size_GCN #This is F in the paper
+        self.size_GCN_out = size_GCN_out   #Always 1 for the sake of this research, but in principle, it can be changed
         self.adjacency_matrix = adjacency_matrix
         self.num_nodes = num_nodes
         self.run_GCN = run_GCN
@@ -63,7 +67,7 @@ class own_TGCN(nn.Module):
         if not run_GCN:
             print("Warning: run_GCN is set to False. The GCN layers will not be used.")
             self.size_GCN_out = 1  # Set to 1 if GCN is not used, so LSTM can still work
-            size_GCN_out = 1  # Set GCN size to 1 if not used
+            size_GCN_out = 1  # Set GCN size to 1 if not used. Doesn't affect LSTM, but keeps the code consistent.
         A = torch.tensor(adjacency_matrix) if not torch.is_tensor(adjacency_matrix) else adjacency_matrix
         assert A.size(0) == A.size(1), "Adjacency matrix must be square"
         assert A.size(0) == num_nodes, f"Adjacency matrix size {A.size(0)} does not match num_nodes {num_nodes}"
@@ -71,12 +75,12 @@ class own_TGCN(nn.Module):
         Dtilde = torch.sum(Atilde, dim=1)
         Dtilde_inv_sqrt = torch.diag(1 / torch.sqrt(Dtilde))
         convolution_matrix = torch.matmul(Dtilde_inv_sqrt, torch.matmul(Atilde, Dtilde_inv_sqrt))
-        convolution_matrix_sparse = convolution_matrix.to_sparse()
+        convolution_matrix_sparse = convolution_matrix.to_sparse() #Never used, but it exists
 
         self.register_buffer('convolution_matrix', convolution_matrix)
         self.register_buffer('convolution_matrix_sparse', convolution_matrix_sparse)
-        self.gcn_layers = nn.ModuleList()
-        self.gcn_layers.append(nn.Linear(1, size_GCN))           
+        self.gcn_layers = nn.ModuleList() # Initialize as an empty ModuleList
+        self.gcn_layers.append(nn.Linear(1, size_GCN))           # Ad a linear transform
         for _ in range(num_layers_GCN - 1):
             self.gcn_layers.append(nn.Linear(size_GCN, size_GCN))
         self.gcn_layers.append(nn.Linear(size_GCN, size_GCN_out)) 
@@ -86,39 +90,39 @@ class own_TGCN(nn.Module):
                             num_layers=num_layers_LSTM,
                             batch_first=True)
 
-        self.fc = nn.Linear(size_LSTM, num_nodes)  # unchanged
-        self.fc_alpha = nn.Linear(size_LSTM, T)   #
+        self.fc = nn.Linear(size_LSTM, num_nodes)  #Not used anymore
+        self.fc_alpha = nn.Linear(size_LSTM, T)  
     def forward_gcn(self, x):
         for layer in self.gcn_layers:               
-            x = torch.matmul(self.convolution_matrix, x) 
-            x = torch.relu(layer(x))                            
+            x = torch.matmul(self.convolution_matrix, x) #Matmul can act on batched data
+            x = torch.relu(layer(x)) #Add non-linearity to each convoluted layer
         return x                                        
 
     def forward(self, x):
         batch_size, seq_len, num_nodes, _ = x.shape
         assert seq_len == self.T, "input window must equal T"
 
-        x_flat = x.reshape(batch_size * seq_len, num_nodes, 1) 
+        x_flat = x.reshape(batch_size * seq_len, num_nodes, 1) #Flatten the input for GCN processing
         if self.run_GCN:
             x_flat = self.forward_gcn(x_flat)
         x_flat = x_flat.reshape(batch_size, seq_len,
-                                num_nodes * self.size_GCN_out)         
+                                num_nodes * self.size_GCN_out)         #Unflatten the input back so that the LSTM can process it
 
         _, (h_n, _) = self.lstm(x_flat)
         alpha = self.fc_alpha(h_n[-1]) 
         pred = torch.einsum('bt,btni->bni', alpha, x)
         return pred, alpha       
 def preprocess_data(L_data, K_data, mu_data, p_data,train_timesteps):
-    L = L_data.reshape(L_data.shape[0], L_data.shape[1] * L_data.shape[2], 1)
+    L=L_data.reshape(L_data.shape[0], L_data.shape[1] * L_data.shape[2], 1)
     K=K_data.reshape((K_data.shape[0], K_data.shape[1]*K_data.shape[2], 1))  
     mu=mu_data.reshape((mu_data.shape[0], mu_data.shape[1]*mu_data.shape[2], 1))  
     p=p_data.reshape((p_data.shape[0], p_data.shape[1]*p_data.shape[2], 1)) 
     params=np.concatenate([L, K, mu, p], axis=1)  
-    dparams=params[1:,:,:] - params[:-1,:,:]  
+    dparams=params[1:,:,:] - params[:-1,:,:]  # Delta of parameters
     params_train=dparams[:train_timesteps,:,:] 
     params_test=dparams[train_timesteps:,:,:]
-    mean = params_train.mean(axis=0, keepdims=True)
-    std = params_train.std(axis=0, keepdims=True) 
+    mean=params_train.mean(axis=0, keepdims=True)
+    std=params_train.std(axis=0, keepdims=True) 
     params_train_normalized = (params_train - mean) / (std + 1e-14)
     params_test_normalized = (params_test - mean) / (std + 1e-14)
     return params_train_normalized, params_test_normalized, mean, std
@@ -138,7 +142,7 @@ def train_model(train_data, cfg,adjaceny_matrix,test_data,save_model_state=None,
     filename="outputs/"
     for key, value in sorted(cfg.items()):
         filename += f"{key}={value}_"
-    filename = filename[:-1] + ".txt"  # Remove the last underscore and add .pt
+    filename = filename[:-1] + ".txt"  # Remove last underscore and add .txt
     model= own_TGCN(
         num_layers_GCN=num_layers_GCN,
         num_layers_LSTM=num_layers_LSTM,
@@ -150,7 +154,7 @@ def train_model(train_data, cfg,adjaceny_matrix,test_data,save_model_state=None,
         run_GCN=run_GCN,
         T=cfg['T']
     )
-    train_data=torch.tensor(train_data)  # Convert to tensor
+    train_data=torch.tensor(train_data)  
     test_data=torch.tensor(test_data)
     opt = torch.optim.Adam(model.parameters(), lr=cfg['learning_rate'])
     criterion = nn.MSELoss()
@@ -160,7 +164,7 @@ def train_model(train_data, cfg,adjaceny_matrix,test_data,save_model_state=None,
     indices_testing=list(range(test_data.shape[0] - T))
     test_data_batch = torch.stack([test_data[s : s + T, :, :] for s in indices_testing], dim=0)
     idiot_prediction=torch.stack([test_data[s + T-1, :, :] for s in indices_testing], dim=0) #We simply predict the previous change
-    desired_output_test = torch.stack([test_data[s + T, :, :] for s in indices_testing], dim=0) #We simply predict 
+    desired_output_test = torch.stack([test_data[s + T, :, :] for s in indices_testing], dim=0) #The desired output
     idiot_error=criterion(desired_output_test,idiot_prediction)
     training_avg_20= []
     if save_output:
@@ -189,7 +193,7 @@ def train_model(train_data, cfg,adjaceny_matrix,test_data,save_model_state=None,
                 save_model(model, cfg, epoch=save_model_state, base_dir="outputs/")
                 print("Saved model state at epoch", save_model_state)
                 sys.exit(0)  # Exit after saving the model state
-        if (epoch+1) % 20 == 0 or epoch == 0:  # Print every 5 epochs (adjust as you like)
+        if (epoch+1) % 20 == 0 or epoch == 0:
             print(f'Epoch [{epoch + 1}/{cfg["num_epochs"]}], Loss: {loss.item():.4f}')
             training_avg= np.mean(training_avg_20)
             model.eval()
@@ -214,8 +218,8 @@ def train_model(train_data, cfg,adjaceny_matrix,test_data,save_model_state=None,
             model.train()
     return model
 if __name__ == "__main__":
-    torch.manual_seed(42)  # For reproducibility
-    np.random.seed(42)  # For reproducibility
+    torch.manual_seed(42)  
+    np.random.seed(42)  
     dim=3
     if dim==2:
         infile_2D = np.load("nonlinear_coefficients_dimension=2_ngauss_init=29.npz")
@@ -245,7 +249,7 @@ if __name__ == "__main__":
         'num_epochs': 2000,
         'batch_size': 16,
         'learning_rate': 1e-3,
-        'T': 10,  # Unrolling parameter
+        'T': 10, 
         "num_layers_GCN": 2,
         "num_layers_LSTM": 3,
         "size_LSTM": 64,
@@ -253,6 +257,6 @@ if __name__ == "__main__":
         "size_GCN_out": 1,
         "num_nodes": num_nodes,
         "run_GCN": True,
-        "L2_penalty": 1e-5,  # L2 regularization term
+        "L2_penalty": 1e-5,  
     }
     model = train_model(params_train, cfg,adjaceny_matrix,params_test,save_output=False)

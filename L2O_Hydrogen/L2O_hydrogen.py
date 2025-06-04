@@ -117,7 +117,7 @@ class EvaluateFunction(torch.autograd.Function):
         # then None for optimizee and optimizee_grad since they are not trainable.
         return grad_tensor, None, None
 class BatchEvaluate(torch.autograd.Function):
-    """Vectorised version of EvaluateFunction for heterogeneous optimisees."""
+    """Vectorised version of EvaluateFunction for batch optimization."""
     """Also stolen from ChatGPT, and I do not understand it anymore than I did before."""
     @staticmethod
     def forward(ctx, parameters, optimisees, optimisee_grads):
@@ -160,7 +160,7 @@ class L2OOptimizer(nn.Module):
             ("linear2", nn.Linear(linear_size, linear_size)),
         ]))
 
-        self.lstm_cells = nn.ModuleList() # List of LSTM cells
+        self.lstm_cells = nn.ModuleList() # List of LSTM cells. Necessary for custom c0 and h0
         self.lstm_cells.append(nn.LSTMCell(input_size=linear_size, hidden_size=hidden_size)) #First LSTM cell, input size is linear_size, hidden size is hidden_size
 
         for _ in range(1, num_layers):
@@ -203,7 +203,7 @@ class L2OOptimizer(nn.Module):
         
         delta = output.reshape(batch_size, n) # Reshape to match the original input shape
         ngauss=delta.shape[1]//4
-        scale_exp = self.scale.repeat(ngauss)         #Proper reshaping so it can be multiplied with deltaf
+        scale_exp = self.scale.repeat(ngauss)         #Proper reshaping so it can be multiplied with deltaf. This turned out to be unnecessary, but never touch running code.
         delta_scaled = delta *torch.exp(scale_exp)    
         x_new = x + delta_scaled 
         return x_new, (new_hidden_h_layers, new_hidden_c_layers), delta
@@ -230,17 +230,16 @@ def sample_realistic_batch(batch_size, t_pool, E0, quality):
         optimisee_grads: list length B
         init_losses    : (B,) float64 tensor on CPU
     """
-    while True:
-        # pick a random starting time (respecting the batch size)
-        t0 = np.random.choice(t_pool[: len(t_pool) - batch_size])
-        times = t0 + 0.2 * np.arange(batch_size)
+    while True: #This is *technically* dangerous, but it works for the data I use.
+        t0 = np.random.choice(t_pool[: len(t_pool) - batch_size]) #Random time im the allowed range
+        times = t0 + 0.2 * np.arange(batch_size) #Add the extra times
 
-        triples = [make_error_and_gradient_functions(E0, quality, t) for t in times]
-        lens    = [len(tr[2]) for tr in triples]
+        triples = [make_error_and_gradient_functions(E0, quality, t) for t in times] #Extract error, gradient, and initial parameters for each time
+        lens    = [len(tr[2]) for tr in triples] #The length of the initial parameters for each time
 
-        if len(set(lens)) == 1:                 # all equal → we have a valid batch
+        if len(set(lens)) == 1:                 # all equal 
             P = lens[0]
-            params0    = np.stack([tr[2] for tr in triples])     # (B, P)
+            params0    = np.stack([tr[2] for tr in triples])  
             optimisees = [tr[0] for tr in triples]
             opt_grads  = [tr[1] for tr in triples]
             init_losses = np.array([f(p) for f, p in zip(optimisees, params0)])
@@ -300,9 +299,6 @@ def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
 
         total_loss, final_loss_value = 0., 0.
 
-        # ------------------------------------------------------------------
-        # (b) unroll T steps
-        # ------------------------------------------------------------------
         for j in range(T):
             if j == 0:
                 f_val = init_losses / (init_losses + 1e-16)
@@ -317,15 +313,13 @@ def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
             if j == T - 1:
                 final_loss_value = loss_step.item()
 
-            # ----- meta‑gradient step (skip on the last unroll step) -------
             if j < T - 1:
                 grads_t = torch.stack([
                     torch.tensor(g(parameters[i].detach().cpu().numpy()),
                                  dtype=torch.float64, device=device)
                     for i, g in enumerate(opt_grads)
                 ])
-                # normalise by the initial loss of *each* problem
-                grad_norm = grads_t #/ (init_losses.view(-1, 1) + 1e-16)
+                grad_norm = grads_t 
 
                 parameters, hidden, _ = l2o(parameters, grad_norm, hidden)
         lambda_l1,lambda_l2=L1L2
@@ -340,7 +334,7 @@ def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
             avg_20.pop(0)
         avg_20_loss=np.mean(avg_20)
         print("Loss due to  L1/L2 regularization: %.3f/%.3f"%(lambda_l1*l1_reg.item(),lambda_l2*l2_reg.item()))
-        total_losses.append(total_loss.item()) #The total loss without regularization
+        total_losses.append(total_loss.item()) 
         total_loss = total_loss + lambda_l1 * l1_reg + lambda_l2 * l2_reg
 
 
@@ -371,12 +365,7 @@ def evaluate_test_error(
         quality=1,
         device=None,
 ):
-    """
-    Evaluate the trained L2O network on a fixed grid of time points.
-    Every problem is solved *individually* (no batching), so the varying
-    number of Gaussians never causes shape clashes.
-    Returns the mean final-to-initial loss ratio across all test times.
-    """
+
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     l2o.eval()
 
@@ -483,8 +472,6 @@ if __name__ == "__main__":
                         if "ep%d.pt"%val in os.listdir(mapname):
                             print("Configuration %d: size=%d, batchsize=%d, lr=%.3e, l2=%.3e already trained"%(counter,size,batchsize,lr,l2))
                             continue
-                    print("--------------------------------------------------------------------------------")
                     print("Configuration %d: size=%d, batchsize=%d, lr=%.3e, l2=%.3e"%(counter,size,batchsize,lr,l2))
-                    print("--------------------------------------------------------------------------------")
                     train_l2o_realistic(config,quality=quality, E0=E0)
     

@@ -1,13 +1,4 @@
-# create_results.py
-"""Generate per-timestep MSE traces for a trained TGCN model.
 
-Usage (edit the variables at the top of the file):
-    python create_results.py
-This will write
-    MSE_T=<T>_use_gcn=<bool>.npz    # model error trace
-    MSE_idiot.npz                   # naive baseline error trace
-and also a PNG plot so you can eyeball the trajectory quickly.
-"""
 from __future__ import annotations
 
 import os
@@ -26,18 +17,16 @@ train_timesteps = 1000
 base_dir = "outputs"  
 
 
-def _find_checkpoint(t: int, run_gcn: bool, dir_: str) -> Tuple[Path, dict]:
+def _find_checkpoint(t, run_gcn, dir_) :
     """Return .pt path and *cfg* extracted from the filename.
 
-    Preference order: highest *num_epochs* field (assumed to be the best saved
-    checkpoint produced by the earlier scripts).
     """
     t_pat = f"T={t}_"
     gcn_pat = f"run_GCN={run_gcn}_"
-    regex = re.compile(rf".*{re.escape(t_pat)}.*{re.escape(gcn_pat)}.*\.pt$")
+    regex = re.compile(rf".*{re.escape(t_pat)}.*{re.escape(gcn_pat)}.*\.pt$") #Regex that matches the filename pattern
 
-    best: Tuple[int, Path] | None = None  # (epochs, path)
-    cfg: dict | None = None
+    best = None  
+    cfg = None
 
     for fname in os.listdir(dir_):
         if not regex.match(fname):
@@ -54,7 +43,7 @@ def _find_checkpoint(t: int, run_gcn: bool, dir_: str) -> Tuple[Path, dict]:
     return best[1], cfg
 
 
-def _parse_cfg_from_filename(fname: str) -> dict:
+def _parse_cfg_from_filename(fname):
     pat = (
         r"T=(\d+)_"
         r"batch_size=(\d+)_"
@@ -89,7 +78,6 @@ def _parse_cfg_from_filename(fname: str) -> dict:
         'size_LSTM': int(sz_lstm),
     }
 
-# ─── DATA LOADING ──────────────────────────────────────────────────────────────
 
 
 def _load_raw_data(dim: int = 3):
@@ -102,7 +90,6 @@ def _load_raw_data(dim: int = 3):
     return infile['L'], infile['K'], infile['mu'], infile['p']
 
 
-# ─── MAIN ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     torch.set_default_dtype(torch.float64)
@@ -111,13 +98,11 @@ if __name__ == "__main__":
 
     # 1. Locate checkpoint + cfg
     ckpt_path, cfg = _find_checkpoint(T, use_gcn, base_dir)
-    print(f"▶ Using checkpoint {ckpt_path}")
-    # 2. Re-build model architecture
+    print(f"Using checkpoint {ckpt_path}")
     from own_tgcn import own_TGCN, build_adjacency_matrix, preprocess_data  # noqa: E402
 
     num_nodes = cfg['num_nodes']
 
-     # 3. Prepare data
     L, K, mu, p = _load_raw_data(dim=3)
     num_gaussians= L.shape[1]
     params_train, params_rest, mean, std = preprocess_data(L, K, mu, p, train_timesteps)
@@ -125,7 +110,6 @@ if __name__ == "__main__":
     dparams_torch = torch.tensor(dparams)
     num_coefficients = num_nodes // num_gaussians
 
-    # quick sanity for adjacency (we rebuild to avoid serialising it)
     A = build_adjacency_matrix(num_gaussians, num_coefficients)
     model = own_TGCN(
         num_layers_GCN=cfg['num_layers_GCN'],
@@ -143,15 +127,14 @@ if __name__ == "__main__":
 
    
 
-    # 4. Sliding-window prediction across entire sequence
-    errors: list[float] = []
-    idiot_errors: list[float] = []
-    nochange: list[float] = []  # for the "nothing" baseline
+    errors = []
+    idiot_errors  = [] # The "previous delta"  baseline
+    nochange = []  # for the "nothing" baseline
     with torch.no_grad():
         for idx in range(T, dparams_torch.shape[0]):
-            window = dparams_torch[idx - T:idx, :, :]  # (T, nodes, 1)
+            window = dparams_torch[idx - T:idx, :, :] 
             truth = dparams_torch[idx, :, :]
-            pred, _ = model(window.unsqueeze(0))  # -> (1, nodes, 1)
+            pred, _ = model(window.unsqueeze(0)) 
             mse = torch.mean((pred.squeeze(0) - truth) ** 2).item()
             errors.append(mse)
         for idx in range(1, dparams_torch.shape[0]):
@@ -168,23 +151,8 @@ if __name__ == "__main__":
     # 5. Persist results
     out_model = f"MSE_T={T}_use_gcn={use_gcn}.npz"
     np.savez_compressed(out_model, mse=errors)
-    print(f"✓ Saved model MSE → {out_model}")
 
     out_idiot = "MSE_idiot.npz"
     np.savez_compressed(out_idiot, mse_idiot=idiot_errors)
-    print(f"✓ Saved baseline MSE → {out_idiot}")
     out_nochange = "MSE_nochange.npz"
     np.savez_compressed(out_nochange, mse_nochange=nochange)
-    print(f"✓ Saved no-change MSE → {out_nochange}")
-    # 6. Quick-look plot
-    plt.figure(figsize=(8, 3))
-    plt.plot(errors, label="Model")
-    plt.plot(idiot_errors, label="Idiot", alpha=0.6)
-    plt.title(f"Per-timestep MSE (T={T}, use_gcn={use_gcn})")
-    plt.xlabel("Time index (t-T)")
-    plt.ylabel("MSE")
-    plt.legend()
-    plt.tight_layout()
-    png_name = f"MSE_trace_T={T}_use_gcn={use_gcn}.png"
-    plt.savefig(png_name, dpi=300)
-    print(f"✓ Plot written to {png_name}")

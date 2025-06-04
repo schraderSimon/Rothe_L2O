@@ -8,30 +8,24 @@ import ray
 from ray import tune
 import sys
 from ray.tune.schedulers import ASHAScheduler
-# Import the new session and Checkpoint objects
 from ray.tune import Checkpoint
-#from ray.train import session, Checkpoint
 import tempfile
 import ray.cloudpickle as pickle
 import numpy as np
-# Define the shifted N-dimensional Rastrigin function.
 
 def generate_random_quadratic(n, batch_size):
-    # Random symmetric matrix + diagonal shift for positive definiteness
+    # Random symmetric matrix
     A = torch.randn(batch_size, n, n) #Random matrix
     A =  torch.einsum('bij, bkj -> bik', A, A) 
     return A
 
 def quadratic(x, A, mu):
-    # x: (batch_size, n), A: (batch_size, n, n), mu: (batch_size, n), s: (batch_size, )
-    # Compute (x-mu)^T A (x-mu)+s for each batch element
     xminmu = x - mu
-    return torch.einsum('bi,bij,bj->b', xminmu, A, xminmu)  # Shape: (batch_size,)
+    return torch.einsum('bi,bij,bj->b', xminmu, A, xminmu) 
 def quadratic_grad(x,A,mu):
     xminmu=x-mu
     return 2.0 * torch.einsum('bij,bj->bi',A,xminmu)
-# Define the L2O network that will learn the update rule.
-# This version acts on one variable at a time.
+
 class L2OOptimizer(nn.Module):
     def __init__(self, hidden_size, linear_size=10, num_layers=1):
         super(L2OOptimizer, self).__init__()
@@ -45,7 +39,7 @@ class L2OOptimizer(nn.Module):
             ("linear2", nn.Linear(linear_size, linear_size)),
         ]))
 
-        self.lstm_cells = nn.ModuleList() # List of LSTM cells
+        self.lstm_cells = nn.ModuleList() # List of LSTM cells. Because we want to use our own initial states, we use LSTMCells instead of LSTM.
         self.lstm_cells.append(nn.LSTMCell(input_size=linear_size, hidden_size=hidden_size)) #First LSTM cell, input size is linear_size, hidden size is hidden_size
 
         for _ in range(1, num_layers):

@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import pandas as pd
 import sys
-# If you want SciPy’s BFGS:
 from functools import partial
 from scipy.optimize import minimize
 
@@ -22,45 +21,30 @@ def quadratic(x, A, mu):
     return xminmu.T@A@xminmu  # Shape: (batch_size,)
 
 def quadratic_grad(x, A, mu):
-    """
-    gradient of f(x).
-    grad f(x) = 2 A (x - mu)  (since A is symmetric).
-    """
+
     xminmu = x - mu
-    # We assume A is symmetric. If not, we can do: (A + A.T)/2
-    return 2.0 * (A @ xminmu)
+    return 2.0 * (A @ xminmu) #Assuming A is symmetric, this is the gradient of f(x).
 
 def run_adam_on_quadratic(A, mu, x0, lr=1e-3, max_iters=100):
-    """
-    Run Adam to minimize f(x) = (x - mu)^T A (x - mu).
-    We record f(x_k)/f(x0) at each iteration k.
-    Returns a 1D numpy array of length max_iters with the relative errors.
-    """
-    # Convert A, mu, x0 to Torch. We'll do a direct definition of the objective using
-    # PyTorch's autograd. 
+
     device = torch.device("cpu")
-    A_t = torch.tensor(A, dtype=torch.float32, device=device, requires_grad=False)
+    A_t = torch.tensor(A, dtype=torch.float32, device=device, requires_grad=False) #Convert to torch tensor, not optimizable
     mu_t = torch.tensor(mu, dtype=torch.float32, device=device, requires_grad=False)
 
-    # x will be a torch parameter
-    x = torch.tensor(x0, dtype=torch.float32, device=device, requires_grad=True)
+    x = torch.tensor(x0, dtype=torch.float32, device=device, requires_grad=True) #Optimizable (by means of requires_grad=True)
 
-    # Set up Adam
     optimizer = optim.Adam([x], lr=lr)
 
-    # initial error
     f0 = quadratic(x0, A, mu)
     rel_errors = np.zeros(max_iters, dtype=np.float32)
 
     for i in range(max_iters):
         optimizer.zero_grad()
-        # compute f(x)
         diff = x - mu_t
         f_val = diff @ A_t @ diff
-        f_val.backward()  # autograd for gradient
+        f_val.backward()  # autograd for gradient, which makes the gradient pointless (though we need it for BFGS)
         optimizer.step()
 
-        # store relative error
         current_f = f_val.detach().cpu().item()
         rel_errors[i] = current_f / f0 if f0 != 0.0 else 0.0
 
@@ -71,9 +55,8 @@ def run_bfgs_on_quadratic(A, mu, x0, max_iters=100):
     if f0 == 0.0:
         return np.zeros(max_iters, dtype=np.float32)
 
-    # compute initial grad
     g0 = quadratic_grad(x0, A, mu)
-    initial_inv_hessian = np.diag(1/(abs(g0)+1e-14))
+    initial_inv_hessian = np.diag(1/(abs(g0)+1e-14)) #Use the Hessian mentioned in the paper
 
     iter_xs = []
 
@@ -127,12 +110,9 @@ def main_experiment(
     for lr in adam_learning_rates:
         adam_data[lr] = np.zeros((num_problems, max_iters), dtype=np.float32)
 
-    # BFGS data
     bfgs_data = np.zeros((num_problems, max_iters), dtype=np.float32)
 
-    # Generate problems and solve
     for i in tqdm(range(num_problems), desc="Solving problems"):
-        # pick random dimension n
         n = np.random.randint(dims_min, dims_max+1)
         A, mu, x0 = generate_random_quadratic_problem(n)
 
@@ -143,7 +123,6 @@ def main_experiment(
         rel_errs_bfgs = run_bfgs_on_quadratic(A, mu, x0, max_iters=max_iters)
         bfgs_data[i, :] = rel_errs_bfgs
 
-    # -------------- Compute average and std across problems --------------
     iters_axis = np.arange(1, max_iters+1)
 
     adam_quartiles = {}

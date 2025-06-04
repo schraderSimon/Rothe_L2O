@@ -1,19 +1,11 @@
-# plot_results.py
-"""Aggregate & visualise all per-timestep MSE traces produced by *create_results.py*.
 
-Just run:
-    python plot_results.py
-
-The script discovers files matching ``MSE_T=*`` and also plots the ``MSE_idiot``
-baseline if present.  Output goes to ``all_mse_comparison.png``.
-"""
 from pathlib import Path
 import re
 import numpy as np
 import matplotlib.pyplot as plt
 
 root = Path('.')
-use_GCN= False  # Set to False if you want to plot without GCN
+use_GCN= False 
 model_files = sorted(root.glob('MSE_T=*_use_gcn=%s.npz'% use_GCN))
 id_file = root / 'MSE_idiot.npz'
 nochange_file = root / 'MSE_nochange.npz'
@@ -24,9 +16,8 @@ density = 1
 ranges = [
     (0, 1000, "Training (0–1000)"),
     (1000, 2000, "Test + Validation (1000–2000)"),
-    #(2000, 3000, "Validation (2000–3000)"),
 ]
-fig, axs = plt.subplots(len(ranges), 1, figsize=(10, 4))  # No sharey!
+fig, axs = plt.subplots(len(ranges), 1, figsize=(10, 4))  
 
 for mf in model_files:
     data = np.load(mf)
@@ -50,13 +41,6 @@ if id_file.exists():
     for ax, (lo, hi, _) in zip(axs, ranges):
         mask = (xs >= lo) & (xs < hi)
         ax.plot(xs[mask], ys[mask], label=r'$\Delta_{t-1}$', linestyle='--', linewidth=1.2, alpha=0.5)
-if False:#nochange_file.exists():
-    nochange = np.load(nochange_file)['mse_nochange']
-    xs = np.arange(1, len(nochange)+1, density)
-    ys = nochange[::density]
-    for ax, (lo, hi, _) in zip(axs, ranges):
-        mask = (xs >= lo) & (xs < hi)
-        ax.plot(xs[mask], ys[mask], label='\Delta=0', linestyle=':', linewidth=1.2, alpha=0.5)
 for i, ax in enumerate(axs):
     lo, hi, title = ranges[i]
     ax.set_xlim(lo, hi)
@@ -64,7 +48,6 @@ for i, ax in enumerate(axs):
     ax.set_title(title)
     if i == 1:
         ax.axvline(1200, color='k', linestyle=':', linewidth=2)
-        #ax.text(1200 + 10, ax.get_ylim()[1]*0.95, 'end of training', va='top', ha='left', color='k', fontsize=10)
     if i == 1:
         ax.set_xlabel(r'Time index $i$ corresponding to a time point $t_i$')
     #if i == 1:
