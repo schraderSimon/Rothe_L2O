@@ -20,8 +20,8 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-T = 10               
-use_gcn = True       
+T = 5               
+use_gcn = False       
 train_timesteps = 1000  
 base_dir = "outputs"  
 
@@ -112,7 +112,6 @@ if __name__ == "__main__":
     # 1. Locate checkpoint + cfg
     ckpt_path, cfg = _find_checkpoint(T, use_gcn, base_dir)
     print(f"▶ Using checkpoint {ckpt_path}")
-
     # 2. Re-build model architecture
     from own_tgcn import own_TGCN, build_adjacency_matrix, preprocess_data  # noqa: E402
 
@@ -147,6 +146,7 @@ if __name__ == "__main__":
     # 4. Sliding-window prediction across entire sequence
     errors: list[float] = []
     idiot_errors: list[float] = []
+    nochange: list[float] = []  # for the "nothing" baseline
     with torch.no_grad():
         for idx in range(T, dparams_torch.shape[0]):
             window = dparams_torch[idx - T:idx, :, :]  # (T, nodes, 1)
@@ -157,6 +157,8 @@ if __name__ == "__main__":
         for idx in range(1, dparams_torch.shape[0]):
             truth = dparams_torch[idx, :, :]
             idiot_pred = dparams_torch[idx - 1, :, :]
+            nochange_mse = torch.mean((truth) ** 2).item()
+            nochange.append(nochange_mse)
             idiot_mse = torch.mean((idiot_pred - truth) ** 2).item()
             idiot_errors.append(idiot_mse)
 
@@ -171,7 +173,9 @@ if __name__ == "__main__":
     out_idiot = "MSE_idiot.npz"
     np.savez_compressed(out_idiot, mse_idiot=idiot_errors)
     print(f"✓ Saved baseline MSE → {out_idiot}")
-
+    out_nochange = "MSE_nochange.npz"
+    np.savez_compressed(out_nochange, mse_nochange=nochange)
+    print(f"✓ Saved no-change MSE → {out_nochange}")
     # 6. Quick-look plot
     plt.figure(figsize=(8, 3))
     plt.plot(errors, label="Model")

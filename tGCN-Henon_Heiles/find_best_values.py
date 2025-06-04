@@ -2,7 +2,7 @@ import os
 import re
 import numpy as np
 from own_tgcn import *
-T = 10  # Set your T value here
+T = 5  # Set your T value here
 run_GCN = True  # Set your run_GCN value here
 
 # Directory containing the output files
@@ -47,6 +47,7 @@ for fname in os.listdir(output_dir):
 if best_filename is not None:
     print(f"Best file: {best_filename}")
     print(f"Lowest test loss: {best_test_loss:.8f} at epoch {best_epoch}")
+    sys.exit(0)
 else:
     print("No matching files found.")
 if best_filename is not None:
