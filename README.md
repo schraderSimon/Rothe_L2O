@@ -8,4 +8,6 @@ Furthermore, we have implemented a T-GCN to predict the best starting guess for 
 
 ## Usage
 1. For the test problems, run the models (L2O_quadratic_singleVariable.py, ssm_l2o.py and s4_ssm.py), then the respective run_L2O_experiment_"model".py, before finally running
-   plot_L2O_experiment_"model".py. 
+   plot_L2O_experiment_"model".py. Each "model".py takes command line arguments T (unrolling depth) and k (weight scaling). The experiement codes take three command lines
+   T, k and type ('training' or 'testing'). The plotting codes, similar to the model codes, take T and k as command line arguments.
+   ~~ SHTSHS ~~
