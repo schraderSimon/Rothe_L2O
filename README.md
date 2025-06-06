@@ -17,3 +17,11 @@ Furthermore, we have implemented a T-GCN to predict the best starting guess for 
    run_L2O_experiment_SSM.py 20 1 'testing'
    plot_L2O_experiment_SSM.py 20 1
    ~~~
+2. For L2O_Hydrogen, run `L2O_hydrogen.py narrow` and `L2O_hydrogen.py wide` for the sweep over all metaparameters.
+   To find the configuration for the best metaprameters, run `python3 analyze_runs.py narrow` and `python3 analyze_runs.py wide`.
+   Run `train_and_evaluate_best_model.py` to re-train and re-evaluate the best models.
+   Finally, run `make_plots.py narrow` and `make_plots.py wide` to reproduce the plots.
+3. For the t-GCN, run `train_models.py` to do a sweep over the metaparameters.
+   Run `find_best_values.py 5 True`, `find_best_values.py 5 False`, `find_best_values.py 10 True`, `find_best_values.py 10 False` to find the best metarparameters & epoch. This also re-trains the best model and produces an output.
+   Run `create_results.py 5 True`, `create_results.py 10 True`, `create_results.py 5 False`, `create_results.py 10 False`, to create the MSE data that is visualized in the paper.
+   Finally, run `plot_results True` and `plot_results False` to reproduce the plots.
