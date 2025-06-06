@@ -3,9 +3,9 @@ from pathlib import Path
 import re
 import numpy as np
 import matplotlib.pyplot as plt
-
+import sys
 root = Path('.')
-use_GCN= False 
+use_GCN= sys.argv[1].lower() == 'true'
 model_files = sorted(root.glob('MSE_T=*_use_gcn=%s.npz'% use_GCN))
 id_file = root / 'MSE_idiot.npz'
 nochange_file = root / 'MSE_nochange.npz'

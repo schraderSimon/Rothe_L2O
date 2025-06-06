@@ -288,6 +288,8 @@ def train_l2o_realistic(config,quality=1, E0=0.06,save_params=False):
         if E0 == "all":
             E0_val=np.random.choice([0.03,0.06,0.12])
             print("E0_val: %.2f"%E0_val)
+        else:
+            E0_val = E0
         (times,parameters, optimisees, opt_grads,
          init_losses) = sample_realistic_batch(batch_size, t_pool, E0_val, quality)
 
@@ -409,21 +411,34 @@ if __name__ == "__main__":
     T = 10
     w_multiplier = 1
     seed= 42
+    case=sys.argv[1] if len(sys.argv) > 1 else "narrow"
+    if case == "narrow":
+        quality= 2
+        E0 = 0.06
+        tmin=180
+        tmax=200
+        tmin_test=200
+        tmax_test=210
+        num_epochs=500
+        lr_considered=[1e-3,3e-3,1e-2]
+        l2_considered=[1e-5,1e-4,1e-3,1e-2]
+    elif case == "wide":
+        quality= 1
+        E0 = "all"
+        tmin=180
+        tmax=260
+        tmin_test=260
+        tmax_test=280
+        num_epochs=1000
+        lr_considered=[1e-4,3e-4,1e-3,3e-3,1e-2]
+        l2_considered=[1e-6,1e-5,1e-4]
+ 
     torch.manual_seed(seed)
     np.random.seed(seed)
-    quality=1
-    E0="all"
-    tmin=180
-    tmax=260
-    tmin_test=260
-    tmax_test=280
     num_layers_considered=[3]
-    lr_considered=[3e-4,1e-3,3e-3,1e-2,1e-4]
-    l2_considered=[1e-6,1e-5,1e-4]
     batchsize_considered=[1,2]
     sizes_considered=[256]
     counter=0
-    num_epochs=1000
     for i in range(len(lr_considered)):
         lr=lr_considered[i]
         for j in range(len(batchsize_considered)):
@@ -467,6 +482,8 @@ if __name__ == "__main__":
                     f"E0_{cfg['E0']}"
                 )
                     mapname="runs/"+tag
+                    print(mapname)
+                    
                     if os.path.exists(mapname):
                         val=num_epochs-20
                         if "ep%d.pt"%val in os.listdir(mapname):

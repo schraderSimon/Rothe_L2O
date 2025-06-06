@@ -3,7 +3,7 @@ import json
 import pathlib
 import numpy as np
 import matplotlib.pyplot as plt
-
+import sys
 def analyze_runs(tmin, tmax, tmin_test, tmax_test):
     runs_dir = pathlib.Path("runs")
     best_test_error = float("inf")
@@ -81,8 +81,16 @@ def analyze_runs(tmin, tmax, tmin_test, tmax_test):
     print("Best config:", json.dumps(best_config, indent=2))
 
 if __name__ == "__main__":
-    tmin=180
-    tmax=260
-    tmin_test=260
-    tmax_test=280
+    if sys.argv[1]=="narrow":
+        tmin=180
+        tmax=200
+        tmin_test=200
+        tmax_test=210
+    elif sys.argv[1]=="wide":
+        tmin=180
+        tmax=260
+        tmin_test=260
+        tmax_test=280
+    else:
+        raise ValueError("Unknown argument. Use 'narrow' or 'wide'.")
     analyze_runs(tmin=tmin, tmax=tmax, tmin_test=tmin_test, tmax_test=tmax_test)

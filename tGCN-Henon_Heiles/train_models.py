@@ -28,7 +28,7 @@ if __name__ == "__main__":
     params_train, params_test_and_valid, mean, std = preprocess_data(L_data, K_data, mu_data, p_data, train_timesteps)
     params_test=params_test_and_valid[0:200,:,:]
     batch_sizes=[16, 32, 64]  # Different batch sizes to test
-    T=[5,10, 20]  # Different unrolling parameters to test
+    T=[5,10]  # Different unrolling parameters to test
     hidden_sizes=[64, 128, 256]  # Different hidden sizes to test
     run_GCNs=[False,True]  # Whether to run GCNs or not
     L2_penalties=[1e-4,1e-3,1e-2]  # Different L2 penalties to test

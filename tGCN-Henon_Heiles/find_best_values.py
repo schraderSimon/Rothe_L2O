@@ -2,8 +2,8 @@ import os
 import re
 import numpy as np
 from own_tgcn import *
-T = 5  #Could be read from terminal, but this is lazy mode
-run_GCN = True 
+T=int(sys.argv[1])
+run_GCN = sys.argv[2].lower() == 'true'  # Convert string to boolean
 
 output_dir = "outputs"
 
@@ -46,7 +46,6 @@ for fname in os.listdir(output_dir):
 if best_filename is not None:
     print(f"Best file: {best_filename}")
     print(f"Lowest test loss: {best_test_loss:.8f} at epoch {best_epoch}")
-    sys.exit(0)
 else:
     print("No matching files found.")
 if best_filename is not None:

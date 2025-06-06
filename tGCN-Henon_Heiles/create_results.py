@@ -10,9 +10,9 @@ from typing import Tuple
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-
-T = 5               
-use_gcn = False       
+import sys
+T=int(sys.argv[1])
+use_gcn = sys.argv[2].lower() == 'true'  # Convert string to boolean
 train_timesteps = 1000  
 base_dir = "outputs"  
 

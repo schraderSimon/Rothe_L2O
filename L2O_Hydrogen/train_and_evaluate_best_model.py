@@ -107,7 +107,7 @@ config_narrow=config= {
   "tmin_test": 200,
   "tmax_test": 210,
   "quality": 2, #Quality of the data to generate
-    "E0": 0.06 #Initial energy
+  "E0": 0.06 #Initial energy
 }
 seed=42
 torch.manual_seed(seed)
@@ -115,18 +115,7 @@ np.random.seed(seed)
 quality=2
 E0=0.06
 cfg=config
-tag = (
-f"size{cfg['linear_size']}"
-f"_layers{cfg['num_layers']}"
-f"_lr{cfg['lr']}"
-f"_bs{cfg['batch_size']}"
-f"_l1{cfg['l1']}"            
-f"_l2{cfg['l2']}"            
-f"_tmin{cfg['tmin']}"
-f"_tmax{cfg['tmax']}"
-f"_tmin_test{cfg['tmin_test']}"
-f"_tmax_test{cfg['tmax_test']}"
-)
+tag = "size256_layers3_lr0.001_bs2_l10_l21e-05_tmin180_tmax200_tmin_test200_tmax_test210quality_2E0_0.06"
 mapname="runs/"+tag
 if os.path.exists(mapname):
     if "ep980.pt" in os.listdir(mapname):
@@ -134,7 +123,7 @@ if os.path.exists(mapname):
     else:
         train_l2o_realistic(config,quality=quality, E0=E0,save_params=True)
     best_epoch=820
-    l2o_narrow, _ = load_model_from_config(config, epoch=best_epoch)
+    l2o_narrow, _ = load_model_from_config(config, epoch=best_epoch,tag=tag )
 from L2O_hydrogen import *
 
 

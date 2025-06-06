@@ -1,2 +1,0 @@
-Epoch, train Loss, test loss
-1, 0.7406, 0.8298
